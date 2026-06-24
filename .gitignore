@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.env
+
+# Local DB / processed outputs can be regenerated
+*.db
+
+# Local agent/session caches
+.omc/
+.hermes_claude*_prompt.md
+
+# Office/Windows sidecar files - company data stays local unless explicitly approved
+*.xlsx
+*.xls
+*.xlsm
+*.csv
+*:Zone.Identifier
+
+# Raw company data is sensitive; keep local unless explicitly approved
+/data/raw/**
+
+# Generated processed/export artifacts
+/data/processed/*
+/data/exports/*
+
+# Keep placeholders
+!.gitkeep
