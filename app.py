@@ -460,10 +460,41 @@ with ns_tab3:
         if trend_plot.empty:
             st.info("선택된 매장이 없습니다.")
         else:
-            fig = px.line(trend_plot, x="trend_date", y="nps", color="store_name", markers=True)
-            fig.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", xaxis_title="평가일", yaxis_title="비판매성 NPS")
+            trend_plot = trend_plot.assign(trend_date=pd.to_datetime(trend_plot["trend_date"], errors="coerce"))
+            trend_plot = trend_plot[trend_plot["trend_date"].notna()].copy()
+            trend_plot["trend_label"] = trend_plot["trend_date"].map(lambda d: d.strftime("%m/%d"))
+            trend_plot["hover_date"] = trend_plot["trend_date"].map(lambda d: d.strftime("%Y-%m-%d"))
+            trend_plot["nps_display"] = pd.to_numeric(trend_plot["nps"], errors="coerce").map(
+                lambda v: v if pd.isna(v) or v >= 0 else v * 0.2
+            )
+            x_order = trend_plot.sort_values("trend_date")["trend_label"].drop_duplicates().tolist()
+
+            fig = px.line(
+                trend_plot,
+                x="trend_label",
+                y="nps_display",
+                color="store_name",
+                markers=True,
+                custom_data=["hover_date", "nps"],
+            )
+            fig.update_traces(hovertemplate="%{customdata[0]}<br>비판매성 NPS=%{customdata[1]:.1f}<extra>%{fullData.name}</extra>")
+
+            fig.update_layout(
+                plot_bgcolor="rgba(0,0,0,0)",
+                paper_bgcolor="rgba(0,0,0,0)",
+                xaxis_title="평가일",
+                yaxis_title="비판매성 NPS · 음수구간 압축",
+                yaxis=dict(
+                    range=[-22, 105],
+                    tickmode="array",
+                    tickvals=[-20, -10, 0, 20, 40, 60, 80, 100],
+                    ticktext=["-100", "-50", "0", "20", "40", "60", "80", "100"],
+                    gridcolor="rgba(148,163,184,0.20)",
+                ),
+                xaxis=dict(type="category", categoryorder="array", categoryarray=x_order),
+            )
             st.plotly_chart(fig, use_container_width=True)
-            trend_view = trend_plot.rename(columns={"trend_date": "일자", "agency_name": "대리점", "store_name": "매장", "total_responses": "응답", "promoters": "추천", "passives": "중립", "detractors": "비추천", "nps": "비판매성 NPS", "risk_count": "Risk건수"})
+            trend_view = trend_plot.drop(columns=["trend_label", "hover_date", "nps_display"]).rename(columns={"trend_date": "일자", "agency_name": "대리점", "store_name": "매장", "total_responses": "응답", "promoters": "추천", "passives": "중립", "detractors": "비추천", "nps": "비판매성 NPS", "risk_count": "Risk건수"})
             st.dataframe(trend_view, use_container_width=True, hide_index=True, column_config={"비판매성 NPS": st.column_config.NumberColumn("비판매성 NPS", format="%.2f")})
 with ns_tab4:
     if sales_good_non_sales_weak_view_base.empty:
