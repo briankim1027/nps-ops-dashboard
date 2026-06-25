@@ -85,10 +85,11 @@ div[data-testid="stMetric"] {background:white; border:1px solid var(--skt-line);
 .stTabs [aria-selected="true"] {background:#815CF6 !important; color:white !important;}
 [data-testid="stDataFrame"] {border-radius:18px; overflow:hidden; border:1px solid var(--skt-line); box-shadow:0 8px 24px rgba(13,14,26,.05);}
 .skt-help-box {background:#FFFFFF; border:1px solid var(--skt-line); border-radius:20px; padding:16px 18px; box-shadow:0 8px 24px rgba(13,14,26,.06); margin:8px 0 16px 0;}
-.skt-help-title {font-size:16px; font-weight:900; margin:0 0 8px 0; color:#1A1A1A;}
+.skt-help-title {font-size:16px; font-weight:900; margin:0 0 10px 0; color:#1A1A1A;}
 .skt-help-grid {display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px 16px;}
-.skt-help-item {font-size:13px; line-height:1.55; color:#333344;}
-.skt-chip {display:inline-block; min-width:88px; text-align:center; border-radius:999px; padding:4px 10px; margin-right:8px; font-size:12px; font-weight:900; color:white; background:#815CF6;}
+.skt-help-item {display:flex; align-items:flex-start; gap:10px; margin-top:10px; font-size:13px; line-height:1.55; color:#333344;}
+.skt-help-text {flex:1; padding-top:2px;}
+.skt-chip {display:inline-block; flex:0 0 88px; min-width:88px; text-align:center; border-radius:999px; padding:4px 10px; margin-right:0; font-size:12px; font-weight:900; color:white; background:#815CF6;}
 .skt-chip.orange {background:#DC6339;}.skt-chip.yellow {background:#B89B00;}.skt-chip.green {background:#249A45;}.skt-chip.gray {background:#6B7280;}.skt-chip.magenta {background:#C045F6;}
 .skt-formula {font-family:'JetBrains Mono','Courier New',monospace; background:#F5F3FF; border-radius:12px; padding:10px 12px; font-size:13px; color:#231653; margin-top:8px;}
 .skt-priority-note {font-size:12.5px; color:#4B4B5F; margin:8px 0 18px 0; line-height:1.55;}
@@ -339,9 +340,9 @@ else:
         f"""
         <div class="skt-help-box">
           <div class="skt-help-title">{ti.get('headline', '동적 해석메시지')}</div>
-          <div class="skt-help-item"><span class="skt-chip">이번 주 판세</span>{ti.get('weekly_situation', ti.get('narrative', '-'))}</div>
-          <div class="skt-help-item"><span class="skt-chip magenta">최근 변화</span>{ti.get('recent_change', '-')}</div>
-          <div class="skt-help-item"><span class="skt-chip orange">오늘 실행</span>{ti.get('action_point', ti.get('recommended_action', '-'))}</div>
+          <div class="skt-help-item"><span class="skt-chip">이번 주 판세</span><span class="skt-help-text">{ti.get('weekly_situation', ti.get('narrative', '-'))}</span></div>
+          <div class="skt-help-item"><span class="skt-chip magenta">최근 변화</span><span class="skt-help-text">{ti.get('recent_change', '-')}</span></div>
+          <div class="skt-help-item"><span class="skt-chip orange">오늘 실행</span><span class="skt-help-text">{ti.get('action_point', ti.get('recommended_action', '-'))}</span></div>
         </div>
         """,
         unsafe_allow_html=True,
