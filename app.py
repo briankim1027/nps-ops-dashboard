@@ -243,8 +243,8 @@ st.markdown(
 
 trend_title_col, date_from_col, date_to_col = st.columns([0.58, 0.21, 0.21])
 with trend_title_col:
-    st.markdown('<div class="skt-section-title">주간 NPS Trend</div>', unsafe_allow_html=True)
-    st.markdown('<div class="skt-section-caption">선택 기간의 일자별 NPS와 판매성/비판매성 응답건수를 함께 확인합니다.</div>', unsafe_allow_html=True)
+    st.markdown('<div class="skt-section-title">6월 NPS Trend</div>', unsafe_allow_html=True)
+    st.markdown('<div class="skt-section-caption">기본값은 6월 전체 기간입니다. 날짜를 조정해 주간/특정 기간 흐름도 함께 확인합니다.</div>', unsafe_allow_html=True)
 
 if nps_time_intelligence.empty or daily_nps_trend.empty:
     st.info("NPS Trend 산출 데이터가 없습니다. `python scripts/build_data.py`를 다시 실행하세요.")
@@ -258,8 +258,8 @@ else:
 
     min_trend_date = trend["trend_date"].min()
     max_trend_date = trend["trend_date"].max()
-    default_start = week_start if pd.notna(week_start) else min_trend_date
-    default_end = week_end if pd.notna(week_end) else max_trend_date
+    default_start = min_trend_date
+    default_end = max_trend_date
     default_start = max(default_start, min_trend_date)
     default_end = min(default_end, max_trend_date)
 
@@ -310,23 +310,24 @@ else:
                 fig.add_trace(go.Scatter(
                     x=sub["trend_label"], y=sub["nps"], name=f"{axis} NPS",
                     mode="lines+markers",
-                    line=dict(color=colors[axis], width=4 if axis == "종합" else 2.4, dash="solid" if axis == "종합" else "dot"),
+                    line=dict(color=colors[axis], width=4 if axis in {"종합", "비판매성"} else 2.4, dash="solid" if axis == "종합" else "dot"),
                     marker=dict(size=8 if axis == "종합" else 6),
                     customdata=sub["trend_date"].dt.strftime("%Y-%m-%d"),
                     hovertemplate="%{customdata}<br>NPS=%{y:.1f}<extra>%{fullData.name}</extra>",
                 ))
         fig.add_trace(go.Scatter(
             x=x_order, y=[target_score] * len(x_order), name=f"목표 {target_score:.0f}",
-            mode="lines", line=dict(color="#6B7280", width=2, dash="dash"),
+            mode="lines", line=dict(color="#111111", width=3, dash="solid"),
             hovertemplate=f"목표 NPS={target_score:.0f}<extra></extra>",
         ))
         min_nps = pd.to_numeric(weekly_trend["nps"], errors="coerce").min()
         y_min = 0 if pd.isna(min_nps) or min_nps >= 0 else max(-100, float(min_nps) - 5)
+        nps_axis_top = 115 if y_min >= 0 else 105
         fig.update_layout(
             barmode="group", bargap=0.42, bargroupgap=0.18,
             plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
             xaxis_title="업무처리일자", yaxis_title="NPS", legend_title_text=None,
-            yaxis=dict(range=[y_min, 105], gridcolor="rgba(148,163,184,0.20)"),
+            yaxis=dict(range=[y_min, nps_axis_top], gridcolor="rgba(148,163,184,0.20)"),
             yaxis2=dict(title="응답건수", overlaying="y", side="right", showgrid=False, rangemode="tozero"),
             xaxis=dict(type="category", categoryorder="array", categoryarray=x_order),
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
