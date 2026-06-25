@@ -241,47 +241,96 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-st.markdown('<div class="skt-section-title">이번 주 NPS Time Intelligence</div>', unsafe_allow_html=True)
-st.markdown('<div class="skt-section-caption">NPS 원장 업무처리일자 기준의 주간 흐름과 오늘 상태를 자동 해석합니다. 일비용/판매 activity는 이번 버전에서 제외했습니다.</div>', unsafe_allow_html=True)
+trend_title_col, date_from_col, date_to_col = st.columns([0.58, 0.21, 0.21])
+with trend_title_col:
+    st.markdown('<div class="skt-section-title">주간 NPS Trend</div>', unsafe_allow_html=True)
+    st.markdown('<div class="skt-section-caption">선택 기간의 일자별 NPS와 판매성/비판매성 응답건수를 함께 확인합니다.</div>', unsafe_allow_html=True)
+
 if nps_time_intelligence.empty or daily_nps_trend.empty:
-    st.info("Time Intelligence 산출 데이터가 없습니다. `python scripts/build_data.py`를 다시 실행하세요.")
+    st.info("NPS Trend 산출 데이터가 없습니다. `python scripts/build_data.py`를 다시 실행하세요.")
 else:
     ti = nps_time_intelligence.iloc[0]
     week_start = pd.to_datetime(ti.get("week_start"), errors="coerce")
     week_end = pd.to_datetime(ti.get("week_end"), errors="coerce")
     trend = daily_nps_trend.copy()
     trend["trend_date"] = pd.to_datetime(trend["trend_date"], errors="coerce")
-    weekly_trend = trend[(trend["trend_date"] >= week_start) & (trend["trend_date"] <= week_end)].copy()
-    if weekly_trend.empty:
-        st.info("이번 주 NPS 흐름 데이터가 없습니다.")
+    trend = trend[trend["trend_date"].notna()].copy()
+
+    min_trend_date = trend["trend_date"].min()
+    max_trend_date = trend["trend_date"].max()
+    default_start = week_start if pd.notna(week_start) else min_trend_date
+    default_end = week_end if pd.notna(week_end) else max_trend_date
+    default_start = max(default_start, min_trend_date)
+    default_end = min(default_end, max_trend_date)
+
+    with date_from_col:
+        date_from = st.date_input(
+            "Date from",
+            value=default_start.date(),
+            min_value=min_trend_date.date(),
+            max_value=max_trend_date.date(),
+            key="weekly_nps_date_from",
+        )
+    with date_to_col:
+        date_to = st.date_input(
+            "Date to",
+            value=default_end.date(),
+            min_value=min_trend_date.date(),
+            max_value=max_trend_date.date(),
+            key="weekly_nps_date_to",
+        )
+
+    if date_from > date_to:
+        st.warning("Date from이 Date to보다 늦습니다. 날짜 범위를 다시 선택하세요.")
+        weekly_trend = pd.DataFrame()
     else:
+        start_ts = pd.Timestamp(date_from)
+        end_ts = pd.Timestamp(date_to)
+        weekly_trend = trend[(trend["trend_date"] >= start_ts) & (trend["trend_date"] <= end_ts)].copy()
+
+    if weekly_trend.empty:
+        st.info("선택 기간의 NPS 흐름 데이터가 없습니다.")
+    else:
+        weekly_trend["trend_label"] = weekly_trend["trend_date"].dt.strftime("%m/%d")
+        x_order = weekly_trend.sort_values("trend_date")["trend_label"].drop_duplicates().tolist()
         fig = go.Figure()
         colors = {"종합": "#815CF6", "판매성": "#249A45", "비판매성": "#DC6339"}
         for axis in ["판매성", "비판매성"]:
-            sub = weekly_trend[weekly_trend["axis"].eq(axis)]
+            sub = weekly_trend[weekly_trend["axis"].eq(axis)].sort_values("trend_date")
             if not sub.empty:
                 fig.add_trace(go.Bar(
-                    x=sub["trend_date"], y=sub["total_responses"], name=f"{axis} 응답건수",
-                    marker_color=colors[axis], opacity=0.24, yaxis="y2"
+                    x=sub["trend_label"], y=sub["total_responses"], name=f"{axis} 응답건수",
+                    marker_color=colors[axis], opacity=0.30, yaxis="y2", width=0.24,
+                    customdata=sub["trend_date"].dt.strftime("%Y-%m-%d"),
+                    hovertemplate="%{customdata}<br>응답건수=%{y:,}<extra>%{fullData.name}</extra>",
                 ))
         for axis in ["종합", "판매성", "비판매성"]:
-            sub = weekly_trend[weekly_trend["axis"].eq(axis)]
+            sub = weekly_trend[weekly_trend["axis"].eq(axis)].sort_values("trend_date")
             if not sub.empty:
                 fig.add_trace(go.Scatter(
-                    x=sub["trend_date"], y=sub["nps"], name=f"{axis} NPS",
-                    mode="lines+markers", line=dict(color=colors[axis], width=3)
+                    x=sub["trend_label"], y=sub["nps"], name=f"{axis} NPS",
+                    mode="lines+markers",
+                    line=dict(color=colors[axis], width=4 if axis == "종합" else 2.4, dash="solid" if axis == "종합" else "dot"),
+                    marker=dict(size=8 if axis == "종합" else 6),
+                    customdata=sub["trend_date"].dt.strftime("%Y-%m-%d"),
+                    hovertemplate="%{customdata}<br>NPS=%{y:.1f}<extra>%{fullData.name}</extra>",
                 ))
-        x_min = weekly_trend["trend_date"].min()
-        x_max = weekly_trend["trend_date"].max()
         fig.add_trace(go.Scatter(
-            x=[x_min, x_max], y=[target_score, target_score], name=f"목표 {target_score:.0f}",
-            mode="lines", line=dict(color="#6B7280", width=2, dash="dot")
+            x=x_order, y=[target_score] * len(x_order), name=f"목표 {target_score:.0f}",
+            mode="lines", line=dict(color="#6B7280", width=2, dash="dash"),
+            hovertemplate=f"목표 NPS={target_score:.0f}<extra></extra>",
         ))
+        min_nps = pd.to_numeric(weekly_trend["nps"], errors="coerce").min()
+        y_min = 0 if pd.isna(min_nps) or min_nps >= 0 else max(-100, float(min_nps) - 5)
         fig.update_layout(
-            barmode="group", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+            barmode="group", bargap=0.42, bargroupgap=0.18,
+            plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
             xaxis_title="업무처리일자", yaxis_title="NPS", legend_title_text=None,
-            yaxis=dict(range=[-100, 105]),
-            yaxis2=dict(title="응답건수", overlaying="y", side="right", showgrid=False),
+            yaxis=dict(range=[y_min, 105], gridcolor="rgba(148,163,184,0.20)"),
+            yaxis2=dict(title="응답건수", overlaying="y", side="right", showgrid=False, rangemode="tozero"),
+            xaxis=dict(type="category", categoryorder="array", categoryarray=x_order),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            margin=dict(l=20, r=20, t=48, b=20),
         )
         st.plotly_chart(fig, use_container_width=True)
 
@@ -510,7 +559,11 @@ with left:
 with right:
     st.markdown('<div class="skt-section-title">비추천/중립 Risk Top</div>', unsafe_allow_html=True)
     tmp = priority_view_base.copy()
-    tmp["risk_count"] = tmp.get("passives", 0) + tmp.get("detractors", 0)
+    missing_risk_cols = [c for c in ["passives", "detractors"] if c not in tmp.columns]
+    if missing_risk_cols:
+        st.error(f"Risk 차트 필수 컬럼 누락: {missing_risk_cols}. 데이터 빌드를 다시 확인하세요.")
+        st.stop()
+    tmp["risk_count"] = pd.to_numeric(tmp["passives"], errors="coerce").fillna(0) + pd.to_numeric(tmp["detractors"], errors="coerce").fillna(0)
     top = tmp.sort_values("risk_count", ascending=False).head(15).rename(columns={"passives": "중립", "detractors": "비추천"})
     fig = px.bar(top, x="store_name", y=["중립", "비추천"], barmode="stack", color_discrete_sequence=["#E0CD4E", "#DC6339"])
     fig.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", xaxis_title=None, yaxis_title="건수", legend_title_text=None)

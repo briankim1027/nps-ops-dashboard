@@ -11,7 +11,18 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from nps_ops.config import DEFAULT_TARGET_SCORE, DEFAULT_TEAM, PROCESSED_DIR, RAW_DIR, EXPORT_DIR
+from nps_ops.config import (
+    DEFAULT_TARGET_SCORE,
+    DEFAULT_TEAM,
+    EXPORT_DIR,
+    EXPORT_TOP_N_AUDIT,
+    EXPORT_TOP_N_STORES,
+    EXPORT_TOP_N_TYPES,
+    MAPPING_FILE,
+    MAPPING_UNMATCHED_WARN_RATE,
+    PROCESSED_DIR,
+    RAW_DIR,
+)
 from nps_ops.insights import (
     add_voc_classification,
     build_daily_nps_trend,
@@ -25,17 +36,14 @@ from nps_ops.insights import (
     build_store_non_sales_trend,
 )
 from nps_ops.metrics import build_store_priority, summarize_team_from_response
-from nps_ops.parser import parse_workbook, profile_workbook
-
-MAPPING_FILE = ROOT / "팀소속_대리점명_매장명_매칭.xlsx"
+from nps_ops.parser import extract_report_date, parse_workbook, profile_workbook
 
 
 def find_latest_file(raw_dir: Path = RAW_DIR) -> Path:
-    files = sorted(raw_dir.glob("**/*.xlsx"), key=lambda p: p.stat().st_mtime, reverse=True)
-    files = [p for p in files if not p.name.startswith("~$")]
+    files = [p for p in raw_dir.glob("**/*.xlsx") if not p.name.startswith("~$")]
     if not files:
         raise FileNotFoundError(f"No .xlsx files found under {raw_dir}")
-    return files[0]
+    return sorted(files, key=lambda p: (extract_report_date(p) or pd.Timestamp.min.date(), p.stat().st_mtime), reverse=True)[0]
 
 
 def _norm_code(s: pd.Series) -> pd.Series:
@@ -69,6 +77,14 @@ def apply_store_mapping(df: pd.DataFrame, mapping: pd.DataFrame) -> pd.DataFrame
     out = df.copy()
     out["store_code_norm"] = _norm_code(out["store_code"])
     out = out.merge(mapping, on="store_code_norm", how="left")
+    unmatched = out["map_store_name"].isna() & out["store_code"].notna()
+    unmatched_rate = float(unmatched.mean()) if len(out) else 0.0
+    if unmatched_rate > MAPPING_UNMATCHED_WARN_RATE:
+        sample_codes = out.loc[unmatched, "store_code"].astype(str).drop_duplicates().head(10).tolist()
+        print(
+            f"WARNING mapping_unmatched_rate={unmatched_rate:.2%} "
+            f"rows={int(unmatched.sum())}/{len(out)} sample_store_codes={sample_codes}"
+        )
     for src, dst in [
         ("map_team_name", "team_name"),
         ("map_agency_code", "agency_code"),
@@ -89,6 +105,18 @@ def fmt_optional_score(value: object) -> str:
     return f"{float(value):.2f}"
 
 
+def parquet_safe(df: pd.DataFrame) -> pd.DataFrame:
+    """Coerce mixed object columns to nullable strings before pyarrow export."""
+    out = df.copy()
+    for col in [c for c in out.columns if out[c].dtype == "object"]:
+        out[col] = out[col].map(lambda v: pd.NA if pd.isna(v) else str(v))
+    return out
+
+
+def write_parquet(df: pd.DataFrame, path: Path) -> None:
+    parquet_safe(df).to_parquet(path, index=False)
+
+
 def nps_scale_warnings(df: pd.DataFrame, cols: list[str]) -> list[str]:
     warnings: list[str] = []
     for col in cols:
@@ -103,6 +131,34 @@ def nps_scale_warnings(df: pd.DataFrame, cols: list[str]) -> list[str]:
             warnings.append(f"{col} still appears to be entirely 0~1 scale after normalization")
         if (~s.between(-100, 100)).any():
             warnings.append(f"{col} has values outside -100~100 after normalization")
+    return warnings
+
+
+def validate_response_contract(response_fact: pd.DataFrame) -> list[str]:
+    """Return warnings for response-level fields that can silently break insights."""
+    warnings: list[str] = []
+    required = ["promoter_flag", "passive_flag", "detractor_flag", "NCSI"]
+    missing = [c for c in required if c not in response_fact.columns]
+    if missing:
+        return [f"response_fact missing required columns: {missing}"]
+
+    flags = response_fact[["promoter_flag", "passive_flag", "detractor_flag"]].apply(pd.to_numeric, errors="coerce").fillna(0)
+    invalid_flag_values = flags[~flags.isin([0, 1]).all(axis=1)]
+    if not invalid_flag_values.empty:
+        warnings.append(f"response_fact flag columns contain non-binary values: rows={len(invalid_flag_values)}")
+
+    one_hot = flags.sum(axis=1)
+    invalid_one_hot = one_hot.ne(1)
+    if invalid_one_hot.any():
+        warnings.append(f"response_fact 추천/중립/비추천 one-hot violation rows={int(invalid_one_hot.sum())}/{len(response_fact)}")
+
+    ncsi = response_fact["NCSI"].astype(str).str.strip()
+    allowed_ncsi = {"판매성", "비판매성"}
+    unexpected_ncsi = sorted([v for v in ncsi.dropna().unique().tolist() if v not in allowed_ncsi])
+    if unexpected_ncsi:
+        warnings.append(f"response_fact NCSI unexpected values: {unexpected_ncsi[:20]}")
+    if not ncsi.eq("비판매성").any():
+        warnings.append("response_fact NCSI has no 비판매성 rows")
     return warnings
 
 
@@ -122,6 +178,7 @@ def build(path: Path, team: str = DEFAULT_TEAM, target_score: float = DEFAULT_TA
     team_summary = summarize_team_from_response(parsed["response_fact"], team=team)
     store_priority = build_store_priority(parsed["store_agg"], team=team, target_score=target_score)
     scale_warnings = nps_scale_warnings(store_priority, ["nps_score", "sales_nps_score", "non_sales_nps_score", "prev_nps_score", "hq_nps_score"])
+    response_contract_warnings = validate_response_contract(parsed["response_fact"])
     parsed["negative_feedback"] = add_voc_classification(parsed["negative_feedback"])
     non_sales_drilldown = build_non_sales_drilldown(store_priority, target_score=target_score)
     non_sales_business_type_top = build_non_sales_business_type_top(parsed["response_fact"], team=team)
@@ -175,37 +232,37 @@ def build(path: Path, team: str = DEFAULT_TEAM, target_score: float = DEFAULT_TA
     outputs = {}
     for name, df in parsed.items():
         out = PROCESSED_DIR / f"{name}_{ymd}.parquet"
-        df.to_parquet(out, index=False)
+        write_parquet(df, out)
         outputs[name] = str(out)
     priority_path = PROCESSED_DIR / f"store_priority_{team}_{ymd}.parquet"
-    store_priority.to_parquet(priority_path, index=False)
+    write_parquet(store_priority, priority_path)
     outputs["store_priority"] = str(priority_path)
     non_sales_path = PROCESSED_DIR / f"non_sales_drilldown_{team}_{ymd}.parquet"
-    non_sales_drilldown.to_parquet(non_sales_path, index=False)
+    write_parquet(non_sales_drilldown, non_sales_path)
     outputs["non_sales_drilldown"] = str(non_sales_path)
     non_sales_type_path = PROCESSED_DIR / f"non_sales_business_type_top_{team}_{ymd}.parquet"
-    non_sales_business_type_top.to_parquet(non_sales_type_path, index=False)
+    write_parquet(non_sales_business_type_top, non_sales_type_path)
     outputs["non_sales_business_type_top"] = str(non_sales_type_path)
     daily_nps_trend_path = PROCESSED_DIR / f"daily_nps_trend_{team}_{ymd}.parquet"
-    daily_nps_trend.to_parquet(daily_nps_trend_path, index=False)
+    write_parquet(daily_nps_trend, daily_nps_trend_path)
     outputs["daily_nps_trend"] = str(daily_nps_trend_path)
     nps_time_intelligence_path = PROCESSED_DIR / f"nps_time_intelligence_{team}_{ymd}.parquet"
-    nps_time_intelligence.to_parquet(nps_time_intelligence_path, index=False)
+    write_parquet(nps_time_intelligence, nps_time_intelligence_path)
     outputs["nps_time_intelligence"] = str(nps_time_intelligence_path)
     non_sales_trend_path = PROCESSED_DIR / f"store_non_sales_trend_{team}_{ymd}.parquet"
-    store_non_sales_trend.to_parquet(non_sales_trend_path, index=False)
+    write_parquet(store_non_sales_trend, non_sales_trend_path)
     outputs["store_non_sales_trend"] = str(non_sales_trend_path)
     sales_good_ns_weak_path = PROCESSED_DIR / f"sales_good_non_sales_weak_{team}_{ymd}.parquet"
-    sales_good_non_sales_weak.to_parquet(sales_good_ns_weak_path, index=False)
+    write_parquet(sales_good_non_sales_weak, sales_good_ns_weak_path)
     outputs["sales_good_non_sales_weak"] = str(sales_good_ns_weak_path)
     action_path = PROCESSED_DIR / f"store_action_sheet_{team}_{ymd}.parquet"
-    action_sheet.to_parquet(action_path, index=False)
+    write_parquet(action_sheet, action_path)
     outputs["store_action_sheet"] = str(action_path)
     diff_path = PROCESSED_DIR / f"nps_source_recalc_diff_{team}_{ymd}.parquet"
-    nps_source_recalc_diff.to_parquet(diff_path, index=False)
+    write_parquet(nps_source_recalc_diff, diff_path)
     outputs["nps_source_recalc_diff"] = str(diff_path)
     sample_warning_path = PROCESSED_DIR / f"sample_warning_{team}_{ymd}.parquet"
-    sample_warning.to_parquet(sample_warning_path, index=False)
+    write_parquet(sample_warning, sample_warning_path)
     outputs["sample_warning"] = str(sample_warning_path)
 
     # Human-readable export for quick review.
@@ -214,16 +271,16 @@ def build(path: Path, team: str = DEFAULT_TEAM, target_score: float = DEFAULT_TA
         pd.DataFrame([team_summary]).to_excel(writer, sheet_name="team_summary", index=False)
         pd.DataFrame([store_totals]).to_excel(writer, sheet_name="store_sheet_totals", index=False)
         pd.DataFrame([validation]).to_excel(writer, sheet_name="validation", index=False)
-        store_priority.head(64).to_excel(writer, sheet_name="store_priority", index=False)
-        non_sales_drilldown.head(64).to_excel(writer, sheet_name="non_sales_drilldown", index=False)
-        non_sales_business_type_top.head(30).to_excel(writer, sheet_name="non_sales_type_top", index=False)
+        store_priority.head(EXPORT_TOP_N_STORES).to_excel(writer, sheet_name="store_priority", index=False)
+        non_sales_drilldown.head(EXPORT_TOP_N_STORES).to_excel(writer, sheet_name="non_sales_drilldown", index=False)
+        non_sales_business_type_top.head(EXPORT_TOP_N_TYPES).to_excel(writer, sheet_name="non_sales_type_top", index=False)
         daily_nps_trend.to_excel(writer, sheet_name="daily_nps_trend", index=False)
         nps_time_intelligence.to_excel(writer, sheet_name="time_intelligence", index=False)
         store_non_sales_trend.to_excel(writer, sheet_name="store_non_sales_trend", index=False)
-        sales_good_non_sales_weak.head(64).to_excel(writer, sheet_name="sales_good_ns_weak", index=False)
-        nps_source_recalc_diff.head(100).to_excel(writer, sheet_name="nps_recalc_audit", index=False)
-        sample_warning.head(100).to_excel(writer, sheet_name="sample_warning", index=False)
-        action_sheet.head(64).to_excel(writer, sheet_name="store_action_sheet", index=False)
+        sales_good_non_sales_weak.head(EXPORT_TOP_N_STORES).to_excel(writer, sheet_name="sales_good_ns_weak", index=False)
+        nps_source_recalc_diff.head(EXPORT_TOP_N_AUDIT).to_excel(writer, sheet_name="nps_recalc_audit", index=False)
+        sample_warning.head(EXPORT_TOP_N_AUDIT).to_excel(writer, sheet_name="sample_warning", index=False)
+        action_sheet.head(EXPORT_TOP_N_STORES).to_excel(writer, sheet_name="store_action_sheet", index=False)
         parsed["negative_feedback"][parsed["negative_feedback"].get("team_name", "").astype(str).str.strip().eq(team)].to_excel(writer, sheet_name="negative_feedback", index=False)
     outputs["excel_summary"] = str(excel_path)
 
@@ -280,12 +337,15 @@ def build(path: Path, team: str = DEFAULT_TEAM, target_score: float = DEFAULT_TA
         "",
         "## 11. 해석 메모",
         "- 우선순위는 NPS 점수만이 아니라 비추천/중립 절대량, 목표까지 필요 추천수, 응답자 수를 함께 반영합니다.",
+        f"- Excel 요약 시트는 운영 검토용 Top N입니다: 매장/Action 계열 Top {EXPORT_TOP_N_STORES}, 업무유형 Top {EXPORT_TOP_N_TYPES}, 검산/경고 Top {EXPORT_TOP_N_AUDIT}.",
         "- 응답자 수가 작은 매장은 `샘플 착시형`으로 분리하여 과잉해석을 방지합니다.",
         "- VOC 분류는 내부 데이터 외부 전송 없이 로컬 rule 기반으로 산정합니다.",
         "- 운영 판단 기준은 추천/중립/비추천 count 기반 재계산 NPS이며, 원천 Excel NPS 컬럼은 -100~100 점수로 표준화해 검산/참조용으로 유지합니다.",
     ]
     if scale_warnings:
         md.extend(["", "## 12. NPS 스케일 경고", *[f"- {w}" for w in scale_warnings]])
+    if response_contract_warnings:
+        md.extend(["", "## 13. Response Fact 계약 경고", *[f"- {w}" for w in response_contract_warnings]])
     md_path.write_text("\n".join(md), encoding="utf-8")
     outputs["markdown_summary"] = str(md_path)
 
@@ -296,6 +356,7 @@ def build(path: Path, team: str = DEFAULT_TEAM, target_score: float = DEFAULT_TA
         "store_totals": store_totals,
         "validation": validation,
         "scale_warnings": scale_warnings,
+        "response_contract_warnings": response_contract_warnings,
         "outputs": outputs,
     }
 
@@ -315,6 +376,7 @@ def main() -> None:
     print("store_totals=", result["store_totals"])
     print("validation=", result["validation"])
     print("scale_warnings=", result["scale_warnings"])
+    print("response_contract_warnings=", result["response_contract_warnings"])
     print("outputs=")
     for k, v in result["outputs"].items():
         print(f"  {k}: {v}")

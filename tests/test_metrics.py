@@ -19,6 +19,44 @@ from nps_ops.insights import (
     build_sample_warning,
 )
 from nps_ops.metrics import build_store_priority, diagnose_store, normalize_nps_series
+from scripts.build_data import find_latest_file, validate_response_contract
+
+
+class BuildDataGuardrailTest(unittest.TestCase):
+    def test_find_latest_file_prefers_filename_report_date_over_mtime(self) -> None:
+        import os
+        import tempfile
+        import time
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            raw_dir = Path(tmpdir)
+            older_by_name = raw_dir / "●26년06월 NPS평가 통계_0621.xlsx"
+            newer_by_name = raw_dir / "●26년06월 NPS평가 통계_0624.xlsx"
+            pd.DataFrame({"x": [1]}).to_excel(older_by_name, index=False)
+            pd.DataFrame({"x": [1]}).to_excel(newer_by_name, index=False)
+            now = time.time()
+            os.utime(newer_by_name, (now - 100, now - 100))
+            os.utime(older_by_name, (now, now))
+
+            self.assertEqual(find_latest_file(raw_dir).name, newer_by_name.name)
+
+    def test_validate_response_contract_passes_expected_operating_shape(self) -> None:
+        response = pd.DataFrame([
+            {"promoter_flag": 1, "passive_flag": 0, "detractor_flag": 0, "NCSI": "판매성"},
+            {"promoter_flag": 0, "passive_flag": 1, "detractor_flag": 0, "NCSI": "비판매성"},
+            {"promoter_flag": 0, "passive_flag": 0, "detractor_flag": 1, "NCSI": "비판매성"},
+        ])
+        self.assertEqual(validate_response_contract(response), [])
+
+    def test_validate_response_contract_warns_on_silent_failure_shapes(self) -> None:
+        response = pd.DataFrame([
+            {"promoter_flag": 0, "passive_flag": 0, "detractor_flag": 0, "NCSI": "기타"},
+            {"promoter_flag": 1, "passive_flag": 1, "detractor_flag": 0, "NCSI": "판매성"},
+        ])
+        warnings = validate_response_contract(response)
+        self.assertTrue(any("one-hot violation" in w for w in warnings))
+        self.assertTrue(any("unexpected values" in w for w in warnings))
+        self.assertTrue(any("no 비판매성" in w for w in warnings))
 
 
 class MetricsScaleTest(unittest.TestCase):
