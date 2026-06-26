@@ -246,3 +246,94 @@ Risk Map bubble chart에서 62개 매장이 표시되지만 원래 좌표 기준
 - jitter 적용 후 고유 위치: 62개
 - 총 표시 매장: 62개
 - 유형별 count 합계: 62개
+
+## 내일 재개용 Handoff — 현재 최종 상태
+
+### 현재 Git 상태
+
+마지막으로 push된 기준은 다음 commit이다.
+
+```text
+978c97d fix: jitter overlapping risk map bubbles
+```
+
+현재 `main`과 `origin/main`은 동기화된 상태로 확인했다.
+
+```text
+## main...origin/main
+```
+
+### 현재 Risk Map 최종 구조
+
+Risk Map은 이제 단순 scatter가 아니라 **현장 action map** 구조다.
+
+- 제목: `매장 NPS Risk Map — 6월 월누적 기준`
+- Caption: `X축=비판매성 응답 수 · Y축=비판매성 NPS · Bubble=전체 응답건수로 매장별 월누적 risk를 포지셔닝합니다.`
+- X축: 원값 `비판매성 응답 수`, display는 겹침 방지를 위한 jitter 적용
+- Y축: 원값 `비판매성 NPS`, 음수구간은 압축 display + 겹침 방지 jitter 적용
+- Bubble size: `전체 응답건수`
+- Tooltip: 원래 X/Y 값, 전체 응답건수, 비추천/중립, Care Priority, 동일 좌표 매장 수 표시
+- Legend: 5개 Risk Map 유형 + 동적 개수 표시
+- Type box: bubble chart 하단 / bar chart 상단에 위치
+- Bar chart: Risk Map 유형 순서 → Care Priority 내림차순 정렬
+
+### 현재 표시 대상 수
+
+Risk Map 표시 대상은 `관찰/유지형`, `샘플 착시형`을 제외한 5개 유형이다.
+
+| 유형 | 표시 매장 수 |
+|---|---:|
+| 즉시 개선형 | 14 |
+| 비판매성 취약형 | 13 |
+| 구조 개선형 | 2 |
+| 판매성 취약형 | 1 |
+| 우수 확산형 | 32 |
+| **합계** | **62** |
+
+좌표 겹침은 다음과 같이 해소했다.
+
+```text
+원래 좌표 고유 위치: 47개
+jitter 적용 후 고유 위치: 62개
+```
+
+### 내일 이어서 볼 우선순위
+
+1. **Jitter 강도 시각 확인**
+   - 현재 X jitter: `±0.22`
+   - 현재 Y jitter: `±1.4`
+   - 너무 퍼져 보이면 줄이고, 여전히 겹쳐 보이면 조금 키운다.
+   - tooltip은 원값을 보여주므로 해석 왜곡은 낮다.
+
+2. **Risk Map type count와 필터 연동 확인**
+   - 대리점 필터를 걸었을 때 legend count가 필터링된 매장 수 기준으로 자연스럽게 바뀌는지 확인한다.
+   - 현재 구조상 `priority_view_base` 이후 `risk_map`에서 count를 계산하므로 필터 반영이 되어야 한다.
+
+3. **Bar chart 하단 순서 확인**
+   - `신세계 고창점`, `전북고창 본점`은 하단부로 이동되도록 `categoryarray=top_bar_store_order[::-1]`를 명시했다.
+   - 화면에서 하단부가 잘리는지, label이 읽히는지 확인한다.
+
+4. **Type box 가독성 확인**
+   - chip 폭을 `128px`로 넓혀 `즉시 개선형 (14개)` 같은 count label이 들어가게 했다.
+   - 4열 grid에서 문구가 답답하면 3열 또는 2열로 바꾸는 것도 검토한다.
+
+5. **팀 공유 screenshot 기준 확인**
+   - Plotly modebar는 Risk Map bubble chart에서 숨겼다.
+   - screenshot/export 시 title, legend, type box, bar chart가 한 화면에 과밀하지 않은지 확인한다.
+
+### 재개 명령어
+
+```bash
+cd /home/brian/workplace/nps-ops-dashboard
+.venv/bin/python -m streamlit run app.py --server.headless true --server.port 8502
+```
+
+검증 명령어:
+
+```bash
+git diff --check
+.venv/bin/python -m py_compile app.py
+.venv/bin/python -m pytest -q
+```
+
+필요하면 focused verification은 `/tmp/hermes-verify-*` 임시 스크립트로 수행한다. 최근 시스템 reminder는 canonical test를 감지하지 못해 반복 발생했으므로, 마지막 edit 이후에는 ad-hoc verification을 별도로 남기는 게 안전하다.
