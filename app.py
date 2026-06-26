@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import math
 import sys
 
 ROOT = Path(__file__).resolve().parent
@@ -91,7 +92,7 @@ div[data-testid="stMetric"] {background:white; border:1px solid var(--skt-line);
 .skt-help-grid {display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px 16px;}
 .skt-help-item {display:flex; align-items:flex-start; gap:10px; margin-top:10px; font-size:13px; line-height:1.55; color:#333344;}
 .skt-help-text {flex:1; padding-top:2px;}
-.skt-chip {display:inline-block; flex:0 0 88px; min-width:88px; text-align:center; border-radius:999px; padding:4px 10px; margin-right:0; font-size:12px; font-weight:900; color:white; background:#815CF6;}
+.skt-chip {display:inline-block; flex:0 0 128px; min-width:128px; text-align:center; border-radius:999px; padding:4px 10px; margin-right:0; font-size:12px; font-weight:900; color:white; background:#815CF6;}
 .skt-chip.orange {background:#DC6339;}.skt-chip.yellow {background:#E0CD4E; color:#1A1A1A;}.skt-chip.green {background:#249A45;}.skt-chip.gray {background:#6B7280;}.skt-chip.magenta {background:#C045F6;}
 .skt-formula {font-family:'JetBrains Mono','Courier New',monospace; background:#F5F3FF; border-radius:12px; padding:10px 12px; font-size:13px; color:#231653; margin-top:8px;}
 .skt-priority-note {font-size:12.5px; color:#4B4B5F; margin:8px 0 18px 0; line-height:1.55;}
@@ -462,16 +463,44 @@ RISK_MAP_COLOR_MAP = {
     "판매성 취약형": "#815CF6",
     "우수 확산형": "#249A45",
 }
+RISK_MAP_TYPE_DESCRIPTIONS = {
+    "즉시 개선형": "비판매성 NPS가 낮고 중립/비추천 영향이 큰 최우선 케어 후보. VOC 원문 확인과 즉시 코칭 우선.",
+    "비판매성 취약형": "판매성보다 비판매성 축에서 목표 미달이 두드러지는 매장. 팀 평가 대응 관점에서 설명·마무리 멘트 점검.",
+    "구조 개선형": "응답 표본과 risk가 누적되며 판매성·비판매성 경험이 함께 흔들리는 매장. 단발 조치보다 프로세스 개선 관점.",
+    "판매성 취약형": "비판매성은 방어되지만 판매 상담/가입·기변 축의 NPS가 낮은 매장. 판매 과정 품질 점검 대상.",
+    "우수 확산형": "응답 표본이 있고 목표권을 방어하는 매장. 우수 응대 패턴을 확인해 주변 매장으로 확산.",
+}
+RISK_MAP_CHIP_CLASS = {
+    "즉시 개선형": "orange",
+    "비판매성 취약형": "magenta",
+    "구조 개선형": "yellow",
+    "판매성 취약형": "",
+    "우수 확산형": "green",
+}
 
-legend_html = """
+
+def risk_type_label_map(counts: pd.Series) -> dict[str, str]:
+    return {name: f"{name} ({int(counts.get(name, 0))}개)" for name in RISK_MAP_TYPE_ORDER}
+
+
+def risk_type_color_map(label_map: dict[str, str]) -> dict[str, str]:
+    return {label_map[name]: RISK_MAP_COLOR_MAP[name] for name in RISK_MAP_TYPE_ORDER}
+
+
+def build_risk_map_legend_html(counts: pd.Series) -> str:
+    label_map = risk_type_label_map(counts)
+    items = []
+    for name in RISK_MAP_TYPE_ORDER:
+        chip_class = RISK_MAP_CHIP_CLASS[name]
+        class_attr = f"skt-chip {chip_class}" if chip_class else "skt-chip"
+        items.append(
+            f'<div class="skt-help-item"><span class="{class_attr}">{label_map[name]}</span>{RISK_MAP_TYPE_DESCRIPTIONS[name]}</div>'
+        )
+    return f"""
 <div class="skt-help-box">
   <div class="skt-help-title">Risk Map 유형구분</div>
   <div class="skt-help-grid">
-    <div class="skt-help-item"><span class="skt-chip orange">즉시 개선형</span>비판매성 NPS가 낮고 중립/비추천 영향이 큰 최우선 케어 후보. VOC 원문 확인과 즉시 코칭 우선.</div>
-    <div class="skt-help-item"><span class="skt-chip magenta">비판매성 취약형</span>판매성보다 비판매성 축에서 목표 미달이 두드러지는 매장. 팀 평가 대응 관점에서 설명·마무리 멘트 점검.</div>
-    <div class="skt-help-item"><span class="skt-chip yellow">구조 개선형</span>응답 표본과 risk가 누적되며 판매성·비판매성 경험이 함께 흔들리는 매장. 단발 조치보다 프로세스 개선 관점.</div>
-    <div class="skt-help-item"><span class="skt-chip">판매성 취약형</span>비판매성은 방어되지만 판매 상담/가입·기변 축의 NPS가 낮은 매장. 판매 과정 품질 점검 대상.</div>
-    <div class="skt-help-item"><span class="skt-chip green">우수 확산형</span>응답 표본이 있고 목표권을 방어하는 매장. 우수 응대 패턴을 확인해 주변 매장으로 확산.</div>
+    {''.join(items)}
   </div>
 </div>
 """
@@ -498,6 +527,10 @@ risk_map = priority_view_base.copy()
 for c in ["non_sales_total_responses", "total_responses", "non_sales_nps_recalc", "priority_score"]:
     risk_map[c] = pd.to_numeric(risk_map.get(c, 0), errors="coerce").fillna(0)
 risk_map = risk_map[(risk_map["total_responses"] > 0) & ~risk_map.get("diagnosis_type", "").astype(str).isin(risk_excluded_types)].copy()
+risk_type_counts = risk_map["diagnosis_type"].value_counts().reindex(RISK_MAP_TYPE_ORDER).fillna(0).astype(int)
+risk_label_map = risk_type_label_map(risk_type_counts)
+risk_label_color_map = risk_type_color_map(risk_label_map)
+risk_label_order = [risk_label_map[name] for name in RISK_MAP_TYPE_ORDER]
 if risk_map.empty:
     st.info("Risk Map에 표시할 매장 데이터가 없습니다.")
 else:
@@ -505,8 +538,22 @@ else:
     risk_map["non_sales_nps_display"] = risk_map["non_sales_nps_recalc"].map(
         lambda v: v if pd.isna(v) or v >= 0 else v * 0.2
     )
+    risk_map["diagnosis_label"] = risk_map["diagnosis_type"].map(risk_label_map).fillna(risk_map["diagnosis_type"].astype(str))
+    risk_map["overlap_count"] = risk_map.groupby(["non_sales_total_responses", "non_sales_nps_display"])["store_name"].transform("size")
+    risk_map["overlap_index"] = risk_map.sort_values("store_name").groupby(["non_sales_total_responses", "non_sales_nps_display"]).cumcount()
+    risk_map["non_sales_total_responses_display"] = risk_map["non_sales_total_responses"].astype(float)
+    duplicate_mask = risk_map["overlap_count"] > 1
+    risk_map.loc[duplicate_mask, "non_sales_total_responses_display"] = risk_map.loc[duplicate_mask].apply(
+        lambda r: float(r["non_sales_total_responses"]) + math.cos(2 * math.pi * r["overlap_index"] / r["overlap_count"]) * 0.22,
+        axis=1,
+    )
+    risk_map["non_sales_nps_display_jitter"] = risk_map["non_sales_nps_display"].astype(float)
+    risk_map.loc[duplicate_mask, "non_sales_nps_display_jitter"] = risk_map.loc[duplicate_mask].apply(
+        lambda r: float(r["non_sales_nps_display"]) + math.sin(2 * math.pi * r["overlap_index"] / r["overlap_count"]) * 1.4,
+        axis=1,
+    )
     x_threshold = float(risk_map["non_sales_total_responses"].median()) if not risk_map.empty else 0.0
-    x_max = max(float(risk_map["non_sales_total_responses"].max()), x_threshold, 1.0)
+    x_max = max(float(risk_map["non_sales_total_responses_display"].max()), x_threshold, 1.0)
     x_upper = x_max * 1.12
     target_display = target_score if target_score >= 0 else target_score * 0.2
     zone_label_y_top = 103
@@ -516,10 +563,10 @@ else:
 
     fig = px.scatter(
         risk_map,
-        x="non_sales_total_responses",
-        y="non_sales_nps_display",
+        x="non_sales_total_responses_display",
+        y="non_sales_nps_display_jitter",
         size="total_responses",
-        color="diagnosis_type",
+        color="diagnosis_label",
         hover_name="store_name",
         custom_data=[
             "agency_name",
@@ -530,18 +577,21 @@ else:
             "passives",
             "priority_score",
             "비판매성 응답비중",
+            "diagnosis_type",
+            "overlap_count",
         ],
-        color_discrete_map=RISK_MAP_COLOR_MAP,
-        category_orders={"diagnosis_type": RISK_MAP_TYPE_ORDER},
-        labels={"non_sales_total_responses": "비판매성 응답 수", "non_sales_nps_display": "비판매성 NPS · 음수구간 압축", "diagnosis_type": "Care 등급"},
+        color_discrete_map=risk_label_color_map,
+        category_orders={"diagnosis_label": risk_label_order},
+        labels={"non_sales_total_responses_display": "비판매성 응답 수", "non_sales_nps_display_jitter": "비판매성 NPS · 음수구간 압축", "diagnosis_label": "Care 등급"},
     )
     fig.update_traces(
         hovertemplate=(
             "<b>%{hovertext}</b><br>"
-            "Care 등급=%{fullData.name}<br>"
+            "Care 등급=%{customdata[8]}<br>"
             "대리점=%{customdata[0]}<br>"
             "비판매성 응답 수=%{customdata[2]:,}<br>"
             "비판매성 NPS=%{customdata[3]:.1f}<br>"
+            "동일 좌표 매장=%{customdata[9]:,}개<br>"
             "전체 응답건수(Bubble)=%{customdata[1]:,}<br>"
             "비추천=%{customdata[4]:,} · 중립=%{customdata[5]:,}<br>"
             "Care Priority=%{customdata[6]:.1f}<br>"
@@ -590,7 +640,7 @@ else:
     )
     st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
-st.markdown(legend_html, unsafe_allow_html=True)
+st.markdown(build_risk_map_legend_html(risk_type_counts), unsafe_allow_html=True)
 
 top_bar = prepare_axis_table(priority_view_base, "비판매성 NPS", target_score)
 top_bar = top_bar[~top_bar.get("diagnosis_type", "").astype(str).isin(risk_excluded_types)].head(20)
@@ -599,6 +649,7 @@ if top_bar.empty:
 else:
     top_bar = top_bar.copy()
     top_bar["_diagnosis_order"] = top_bar["diagnosis_type"].map({name: idx for idx, name in enumerate(RISK_MAP_TYPE_ORDER)}).fillna(len(RISK_MAP_TYPE_ORDER))
+    top_bar["diagnosis_label"] = top_bar["diagnosis_type"].map(risk_label_map).fillna(top_bar["diagnosis_type"].astype(str))
     top_bar = top_bar.sort_values(["_diagnosis_order", "선택축_priority_score"], ascending=[True, False])
     top_bar_store_order = top_bar["store_name"].astype(str).tolist()
     fig = px.bar(
@@ -606,12 +657,12 @@ else:
         x="선택축_priority_score",
         y="store_name",
         orientation="h",
-        color="diagnosis_type",
+        color="diagnosis_label",
         text="선택축_priority_score",
-        hover_data={"agency_name": True, "선택축_NPS": ":.1f", "선택축_총응답자": ":,", "선택축_비추천": ":,"},
-        color_discrete_map=RISK_MAP_COLOR_MAP,
-        category_orders={"diagnosis_type": RISK_MAP_TYPE_ORDER},
-        labels={"선택축_priority_score": "Care Priority", "store_name": "매장", "diagnosis_type": "Care 등급"},
+        hover_data={"agency_name": True, "diagnosis_type": True, "선택축_NPS": ":.1f", "선택축_총응답자": ":,", "선택축_비추천": ":,"},
+        color_discrete_map=risk_label_color_map,
+        category_orders={"diagnosis_label": risk_label_order},
+        labels={"선택축_priority_score": "Care Priority", "store_name": "매장", "diagnosis_label": "Care 등급"},
     )
     fig.update_traces(texttemplate="%{text:.1f}", textposition="outside")
     fig.update_layout(
