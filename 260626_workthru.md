@@ -251,10 +251,10 @@ Risk Map bubble chart에서 62개 매장이 표시되지만 원래 좌표 기준
 
 ### 현재 Git 상태
 
-마지막으로 push된 기준은 다음 commit이다.
+마지막으로 정리한 기준 commit 메시지는 다음이다.
 
 ```text
-978c97d fix: jitter overlapping risk map bubbles
+fix: emphasize shared hot spot risk stores
 ```
 
 현재 `main`과 `origin/main`은 동기화된 상태로 확인했다.
@@ -337,3 +337,82 @@ git diff --check
 ```
 
 필요하면 focused verification은 `/tmp/hermes-verify-*` 임시 스크립트로 수행한다. 최근 시스템 reminder는 canonical test를 감지하지 못해 반복 발생했으므로, 마지막 edit 이후에는 ad-hoc verification을 별도로 남기는 게 안전하다.
+
+## 마무리 작업 — Hot Spot 정렬과 공통 매장 강조
+
+오늘 마지막 수정은 **두 chart를 따로 읽지 않아도 공통 action 매장이 눈에 걸리도록 만드는 것**이었다.
+
+### 1. Hot Spot y축 정렬 기준 재정리
+
+NPS Hot Spot Mesh의 y축 매장은 `store_daily_heatmap` 기준으로 월누적 `risk_count`가 많은 매장 Top 25를 고른다.
+
+정렬 기준은 다음이다.
+
+1. 월누적 `risk_count` 내림차순
+2. 동률이면 월누적 `total_responses` 내림차순
+3. 상위 25개 매장 표시
+
+기존 화면은 사람들이 위에서 아래로 읽는 방식과 맞지 않아, 월누적 risk count가 가장 많은 매장이 하단에 있는 것처럼 읽힐 수 있었다. 그래서 **월누적 risk count가 많은 매장이 y축 상단부터 보이도록 order를 reverse 조정**했다.
+
+현재 기준 최상위 매장은 다음이다.
+
+| 순위 | 매장 | 월누적 응답 | 월누적 risk_count |
+|---:|---|---:|---:|
+| 1 | 군산진포 희망점 | 27 | 5 |
+| 2 | 전북정읍 본점 | 32 | 3 |
+| 3 | 서정 호성점 | 16 | 3 |
+| 4 | 전북고창 본점 | 14 | 3 |
+| 5 | 본  본텔점(본점) | 12 | 3 |
+
+### 2. Risk Map bar chart와 Hot Spot chart의 기준 차이
+
+두 chart는 모두 비판매성 risk를 보지만 목적이 다르다.
+
+- Hot Spot chart: 날짜×매장 기준 `risk_count` 발생량 중심
+- Risk Map bar chart: 비판매성 NPS 기준 `Care Priority` 중심
+
+Risk Map bar chart의 score는 다음 구조다.
+
+```text
+Care Priority = 비추천×10 + 중립×3 + 목표까지 필요추천수×2 + min(비판매성 응답,30)/10 + 목표미달Gap절대값/10
+```
+
+따라서 Hot Spot은 “많이 발생한 매장”, Risk Map bar는 “먼저 개입해야 할 매장”에 가깝다.
+
+### 3. 두 chart 공통 매장 강조
+
+Risk Map bar chart Top 20과 Hot Spot Top 25에 모두 등장하는 매장은 **매장명 label을 bold + italic**으로 표시했다.
+
+목적은 단순하다. 두 chart에 동시에 걸리는 매장은 발생량과 care priority가 동시에 잡힌 매장이므로, label만 봐도 “이 매장은 action 후보”라는 signal이 보이게 하는 것이다.
+
+현재 공통 매장은 14개다.
+
+```text
+군산진포 나운점
+군산진포 희망점
+김제중앙 본점
+더  평화점
+본  본텔점(본점)
+서정 호성점
+순창 본점
+신세계 고창점
+전북고창 본점
+전북나은 중화산점
+전북정읍 본점
+중부 반월점
+중부 삼봉지점
+중부 에코시티점
+```
+
+### 4. 구현 메모
+
+- 공통 매장 set은 `Risk Map bar Top 20 ∩ Hot Spot Top 25`로 계산한다.
+- 공통 매장은 `emphasis_store_label()`에서 `<b><i>매장명</i></b>` 형태로 변환한다.
+- Risk Map bar chart와 Hot Spot heatmap 모두 같은 강조 label을 사용한다.
+- Hot Spot heatmap은 `store_label`을 y축으로 사용하고, category order는 월누적 risk count 내림차순 기준을 따른다.
+
+### 5. 내일 확인할 것
+
+- Hot Spot chart에서 `군산진포 희망점`이 실제 화면 상단에 자연스럽게 보이는지 확인한다.
+- Bold/italic label이 너무 과하면 bold만 남기거나, 공통 매장 marker를 별도 색상/아이콘으로 바꾸는 것도 검토한다.
+- Hot Spot과 Risk Map bar chart 모두에서 공통 매장 강조가 같은 매장에만 적용되는지 필터 변경 시 확인한다.

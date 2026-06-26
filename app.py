@@ -505,6 +505,11 @@ def build_risk_map_legend_html(counts: pd.Series) -> str:
 </div>
 """
 
+
+def emphasis_store_label(store_name: object, emphasis_stores: set[str]) -> str:
+    store_text = str(store_name)
+    return f"<b><i>{store_text}</i></b>" if store_text in emphasis_stores else store_text
+
 priority_formula_html = f"""
 <div class="skt-priority-note">
   <div class="skt-formula">우선순위점수 = 비추천×10 + 중립×3 + 목표까지 필요추천수×2 + min(총응답자,30)/10 + 목표미달Gap절대값/10</div>
@@ -642,6 +647,19 @@ else:
 
 st.markdown(build_risk_map_legend_html(risk_type_counts), unsafe_allow_html=True)
 
+hot_spot_store_rank = pd.DataFrame(columns=["store_name", "total_responses", "risk_count"])
+if not store_daily_heatmap_view_base.empty:
+    _hm_rank = store_daily_heatmap_view_base.copy()
+    _hm_rank["trend_date"] = pd.to_datetime(_hm_rank["trend_date"], errors="coerce")
+    _hm_rank = _hm_rank[_hm_rank["trend_date"].notna()].copy()
+    hot_spot_store_rank = _hm_rank.groupby("store_name", dropna=False).agg(
+        total_responses=("total_responses", "sum"),
+        risk_count=("risk_count", "sum"),
+    ).reset_index()
+    hot_spot_store_rank = hot_spot_store_rank.sort_values(["risk_count", "total_responses"], ascending=False).head(25)
+hot_spot_store_set = set(hot_spot_store_rank["store_name"].astype(str))
+common_action_stores: set[str] = set()
+
 top_bar = prepare_axis_table(priority_view_base, "비판매성 NPS", target_score)
 top_bar = top_bar[~top_bar.get("diagnosis_type", "").astype(str).isin(risk_excluded_types)].head(20)
 if top_bar.empty:
@@ -651,18 +669,21 @@ else:
     top_bar["_diagnosis_order"] = top_bar["diagnosis_type"].map({name: idx for idx, name in enumerate(RISK_MAP_TYPE_ORDER)}).fillna(len(RISK_MAP_TYPE_ORDER))
     top_bar["diagnosis_label"] = top_bar["diagnosis_type"].map(risk_label_map).fillna(top_bar["diagnosis_type"].astype(str))
     top_bar = top_bar.sort_values(["_diagnosis_order", "선택축_priority_score"], ascending=[True, False])
-    top_bar_store_order = top_bar["store_name"].astype(str).tolist()
+    top_bar_store_set = set(top_bar["store_name"].astype(str))
+    common_action_stores = top_bar_store_set & hot_spot_store_set
+    top_bar["store_label"] = top_bar["store_name"].map(lambda store: emphasis_store_label(store, common_action_stores))
+    top_bar_store_order = top_bar["store_label"].astype(str).tolist()
     fig = px.bar(
         top_bar,
         x="선택축_priority_score",
-        y="store_name",
+        y="store_label",
         orientation="h",
         color="diagnosis_label",
         text="선택축_priority_score",
         hover_data={"agency_name": True, "diagnosis_type": True, "선택축_NPS": ":.1f", "선택축_총응답자": ":,", "선택축_비추천": ":,"},
         color_discrete_map=risk_label_color_map,
         category_orders={"diagnosis_label": risk_label_order},
-        labels={"선택축_priority_score": "Care Priority", "store_name": "매장", "diagnosis_label": "Care 등급"},
+        labels={"선택축_priority_score": "Care Priority", "store_label": "매장", "diagnosis_label": "Care 등급"},
     )
     fig.update_traces(texttemplate="%{text:.1f}", textposition="outside")
     fig.update_layout(
@@ -688,20 +709,20 @@ else:
     hm["trend_date"] = pd.to_datetime(hm["trend_date"], errors="coerce")
     hm = hm[hm["trend_date"].notna()].copy()
     hm["date_label"] = hm["trend_date"].dt.strftime("%m/%d")
-    store_rank = hm.groupby("store_name", dropna=False).agg(total_responses=("total_responses", "sum"), risk_count=("risk_count", "sum")).reset_index()
-    store_rank = store_rank.sort_values(["risk_count", "total_responses"], ascending=False).head(25)
+    store_rank = hot_spot_store_rank.copy()
     hm = hm[hm["store_name"].isin(store_rank["store_name"])]
+    hm["store_label"] = hm["store_name"].map(lambda store: emphasis_store_label(store, common_action_stores))
     date_order = hm.sort_values("trend_date")["date_label"].drop_duplicates().tolist()
-    store_order = store_rank["store_name"].tolist()[::-1]
+    store_order = [emphasis_store_label(store, common_action_stores) for store in store_rank["store_name"].astype(str).tolist()]
     fig = px.density_heatmap(
         hm,
         x="date_label",
-        y="store_name",
+        y="store_label",
         z="risk_count",
         histfunc="sum",
-        category_orders={"date_label": date_order, "store_name": store_order},
+        category_orders={"date_label": date_order, "store_label": store_order},
         color_continuous_scale=[[0, "#F5F3FF"], [0.45, "#E0CD4E"], [1, "#DC6339"]],
-        labels={"date_label": "업무처리일", "store_name": "매장", "risk_count": "중립/비추천"},
+        labels={"date_label": "업무처리일", "store_label": "매장", "risk_count": "중립/비추천"},
     )
     fig.update_layout(height=560, plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", margin=dict(l=10, r=10, t=20, b=10), coloraxis_colorbar_title="Risk건수")
     st.plotly_chart(fig, use_container_width=True)
