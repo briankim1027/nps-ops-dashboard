@@ -92,7 +92,7 @@ div[data-testid="stMetric"] {background:white; border:1px solid var(--skt-line);
 .skt-help-item {display:flex; align-items:flex-start; gap:10px; margin-top:10px; font-size:13px; line-height:1.55; color:#333344;}
 .skt-help-text {flex:1; padding-top:2px;}
 .skt-chip {display:inline-block; flex:0 0 88px; min-width:88px; text-align:center; border-radius:999px; padding:4px 10px; margin-right:0; font-size:12px; font-weight:900; color:white; background:#815CF6;}
-.skt-chip.orange {background:#DC6339;}.skt-chip.yellow {background:#B89B00;}.skt-chip.green {background:#249A45;}.skt-chip.gray {background:#6B7280;}.skt-chip.magenta {background:#C045F6;}
+.skt-chip.orange {background:#DC6339;}.skt-chip.yellow {background:#E0CD4E; color:#1A1A1A;}.skt-chip.green {background:#249A45;}.skt-chip.gray {background:#6B7280;}.skt-chip.magenta {background:#C045F6;}
 .skt-formula {font-family:'JetBrains Mono','Courier New',monospace; background:#F5F3FF; border-radius:12px; padding:10px 12px; font-size:13px; color:#231653; margin-top:8px;}
 .skt-priority-note {font-size:12.5px; color:#4B4B5F; margin:8px 0 18px 0; line-height:1.55;}
 .skt-priority-note .skt-formula {display:inline-block; margin:0 0 6px 0;}
@@ -454,16 +454,24 @@ else:
         unsafe_allow_html=True,
     )
 
+RISK_MAP_TYPE_ORDER = ["즉시 개선형", "비판매성 취약형", "구조 개선형", "판매성 취약형", "우수 확산형"]
+RISK_MAP_COLOR_MAP = {
+    "즉시 개선형": "#DC6339",
+    "비판매성 취약형": "#C045F6",
+    "구조 개선형": "#E0CD4E",
+    "판매성 취약형": "#815CF6",
+    "우수 확산형": "#249A45",
+}
+
 legend_html = """
 <div class="skt-help-box">
-  <div class="skt-help-title">종합진단 유형구분</div>
+  <div class="skt-help-title">Risk Map 유형구분</div>
   <div class="skt-help-grid">
-    <div class="skt-help-item"><span class="skt-chip orange">즉시 개선형</span>비추천 2건 이상 또는 목표 미달 상태에서 비추천이 발생한 매장. 현장 VOC 확인과 즉시 코칭 우선.</div>
-    <div class="skt-help-item"><span class="skt-chip magenta">구조 개선형</span>응답 샘플이 충분하고 중립/비추천 risk가 누적되며 판매성·비판매성 축이 함께 취약한 매장.</div>
-    <div class="skt-help-item"><span class="skt-chip yellow">회복 가능형</span>목표 미달이나 비추천보다는 중립 영향이 크고, 추가 추천 확보로 목표 회복 가능성이 높은 매장.</div>
-    <div class="skt-help-item"><span class="skt-chip">비판매성 취약형</span>판매성은 목표 이상이나 비판매성 NPS가 목표 미달인 매장. 팀 평가 대응 관점에서 별도 관리.</div>
-    <div class="skt-help-item"><span class="skt-chip gray">판매성 취약형</span>비판매성은 목표 이상이나 판매성 NPS가 목표 미달인 매장. 판매 상담/가입·기변 과정 점검 대상.</div>
-    <div class="skt-help-item"><span class="skt-chip green">우수 확산형</span>목표 이상이며 응답 샘플이 일정 수준 이상인 매장. 우수 응대 패턴 확산 후보.</div>
+    <div class="skt-help-item"><span class="skt-chip orange">즉시 개선형</span>비판매성 NPS가 낮고 중립/비추천 영향이 큰 최우선 케어 후보. VOC 원문 확인과 즉시 코칭 우선.</div>
+    <div class="skt-help-item"><span class="skt-chip magenta">비판매성 취약형</span>판매성보다 비판매성 축에서 목표 미달이 두드러지는 매장. 팀 평가 대응 관점에서 설명·마무리 멘트 점검.</div>
+    <div class="skt-help-item"><span class="skt-chip yellow">구조 개선형</span>응답 표본과 risk가 누적되며 판매성·비판매성 경험이 함께 흔들리는 매장. 단발 조치보다 프로세스 개선 관점.</div>
+    <div class="skt-help-item"><span class="skt-chip">판매성 취약형</span>비판매성은 방어되지만 판매 상담/가입·기변 축의 NPS가 낮은 매장. 판매 과정 품질 점검 대상.</div>
+    <div class="skt-help-item"><span class="skt-chip green">우수 확산형</span>응답 표본이 있고 목표권을 방어하는 매장. 우수 응대 패턴을 확인해 주변 매장으로 확산.</div>
   </div>
 </div>
 """
@@ -523,7 +531,8 @@ else:
             "priority_score",
             "비판매성 응답비중",
         ],
-        color_discrete_sequence=["#DC6339", "#C045F6", "#E0CD4E", "#815CF6", "#249A45", "#6B7280"],
+        color_discrete_map=RISK_MAP_COLOR_MAP,
+        category_orders={"diagnosis_type": RISK_MAP_TYPE_ORDER},
         labels={"non_sales_total_responses": "비판매성 응답 수", "non_sales_nps_display": "비판매성 NPS · 음수구간 압축", "diagnosis_type": "Care 등급"},
     )
     fig.update_traces(
@@ -581,24 +590,40 @@ else:
     )
     st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
+st.markdown(legend_html, unsafe_allow_html=True)
+
 top_bar = prepare_axis_table(priority_view_base, "비판매성 NPS", target_score)
 top_bar = top_bar[~top_bar.get("diagnosis_type", "").astype(str).isin(risk_excluded_types)].head(20)
 if top_bar.empty:
     st.info("Risk Score Top N 데이터가 없습니다.")
 else:
+    top_bar = top_bar.copy()
+    top_bar["_diagnosis_order"] = top_bar["diagnosis_type"].map({name: idx for idx, name in enumerate(RISK_MAP_TYPE_ORDER)}).fillna(len(RISK_MAP_TYPE_ORDER))
+    top_bar = top_bar.sort_values(["_diagnosis_order", "선택축_priority_score"], ascending=[True, False])
+    top_bar_store_order = top_bar["store_name"].astype(str).tolist()
     fig = px.bar(
-        top_bar.sort_values("선택축_priority_score", ascending=True),
+        top_bar,
         x="선택축_priority_score",
         y="store_name",
         orientation="h",
         color="diagnosis_type",
         text="선택축_priority_score",
         hover_data={"agency_name": True, "선택축_NPS": ":.1f", "선택축_총응답자": ":,", "선택축_비추천": ":,"},
-        color_discrete_sequence=["#DC6339", "#C045F6", "#E0CD4E", "#815CF6", "#249A45", "#6B7280"],
+        color_discrete_map=RISK_MAP_COLOR_MAP,
+        category_orders={"diagnosis_type": RISK_MAP_TYPE_ORDER},
         labels={"선택축_priority_score": "Care Priority", "store_name": "매장", "diagnosis_type": "Care 등급"},
     )
     fig.update_traces(texttemplate="%{text:.1f}", textposition="outside")
-    fig.update_layout(height=520, showlegend=False, plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", xaxis_title="Care Priority", yaxis_title=None, margin=dict(l=10, r=10, t=20, b=10))
+    fig.update_layout(
+        height=520,
+        showlegend=False,
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        xaxis_title="Care Priority",
+        yaxis_title=None,
+        yaxis=dict(categoryorder="array", categoryarray=top_bar_store_order[::-1]),
+        margin=dict(l=10, r=10, t=20, b=10),
+    )
     st.plotly_chart(fig, use_container_width=True)
 
 st.markdown(risk_score_formula_html, unsafe_allow_html=True)
@@ -879,8 +904,6 @@ with right:
     fig = px.bar(top, x="store_name", y=["중립", "비추천"], barmode="stack", color_discrete_sequence=["#E0CD4E", "#DC6339"])
     fig.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", xaxis_title=None, yaxis_title="건수", legend_title_text=None)
     st.plotly_chart(fig, use_container_width=True)
-
-st.markdown(legend_html, unsafe_allow_html=True)
 
 st.markdown('<div class="skt-section-title">VOC / 중립·비추천</div>', unsafe_allow_html=True)
 if negative.empty:

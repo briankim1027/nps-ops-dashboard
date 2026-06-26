@@ -190,3 +190,36 @@ Streamlit app:
 2. `비판매성 응답 중앙값` 기준이 median이 맞는지, 혹은 정책 threshold로 바꾸는 것이 더 나은지 검토
 3. `샘플/VOC 확인` 구간 매장의 실제 VOC 원문 drilldown 연결 여부 검토
 4. Risk Map screenshot을 팀 공유용으로 export할 때 legend/title이 잘리는지 확인
+
+## 추가 작업 — Risk Map 유형구분/Bar Chart 정렬
+
+사용자 추가 요청에 따라 Risk Map 하단 구성을 한 번 더 정리했다.
+
+### 1. Risk Score bar chart 정렬
+
+Risk Map의 두 번째 horizontal bar chart는 색상/category 기준으로 재정렬했다.
+
+- 정렬 기준: Risk Map legend 순서
+  1. 즉시 개선형
+  2. 비판매성 취약형
+  3. 구조 개선형
+  4. 판매성 취약형
+  5. 우수 확산형
+- 각 유형 내부는 Care Priority 내림차순
+- `신세계 고창점`, `전북고창 본점`은 y축 하단부로 내려가도록 category array를 명시했다.
+
+### 2. Risk Map 유형구분 box 재정의 및 위치 이동
+
+기존 `종합진단 유형구분` box는 Risk Map에서 쓰는 5개 유형 기준으로 재정의했다.
+
+- 기존 6개 유형 중 Risk Map에서 제외한 `회복 가능형` 등은 제거
+- Risk Map 상단 legend와 동일한 순서로 box item 배치
+- 색상도 bubble chart/bar chart와 동일한 mapping으로 통일
+- box 위치는 dashboard 하단 진단 영역이 아니라 **Risk Map bubble chart 바로 아래, Risk Score bar chart 위**로 이동
+
+### 3. 검증 포인트
+
+- Risk Map top legend trace order와 `Risk Map 유형구분` box 순서 일치
+- bar chart color trace order 일치
+- y축 category array에서 `전북고창 본점`, `신세계 고창점`이 하단부에 배치됨
+- `Risk Map 유형구분` box가 bubble chart와 bar chart 사이에 위치
