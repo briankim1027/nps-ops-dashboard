@@ -33,7 +33,9 @@ from nps_ops.insights import (
     build_sample_warning,
     build_sales_good_non_sales_weak,
     build_store_action_sheet,
+    build_store_daily_heatmap,
     build_store_non_sales_trend,
+    build_weekday_time_hotspots,
 )
 from nps_ops.metrics import build_store_priority, summarize_team_from_response
 from nps_ops.parser import extract_report_date, parse_workbook, profile_workbook
@@ -185,6 +187,8 @@ def build(path: Path, team: str = DEFAULT_TEAM, target_score: float = DEFAULT_TA
     daily_nps_trend = build_daily_nps_trend(parsed["response_fact"], team=team)
     nps_time_intelligence = build_nps_time_intelligence(parsed["response_fact"], team=team, target_score=target_score, report_date=None)
     store_non_sales_trend = build_store_non_sales_trend(parsed["response_fact"], team=team)
+    store_daily_heatmap = build_store_daily_heatmap(parsed["response_fact"], team=team, axis="비판매성")
+    weekday_time_hotspots = build_weekday_time_hotspots(parsed["response_fact"], team=team, axis="비판매성")
     sales_good_non_sales_weak = build_sales_good_non_sales_weak(store_priority, target_score=target_score)
     nps_source_recalc_diff = build_nps_source_recalc_diff(store_priority)
     sample_warning = build_sample_warning(store_priority, target_score=target_score)
@@ -252,6 +256,12 @@ def build(path: Path, team: str = DEFAULT_TEAM, target_score: float = DEFAULT_TA
     non_sales_trend_path = PROCESSED_DIR / f"store_non_sales_trend_{team}_{ymd}.parquet"
     write_parquet(store_non_sales_trend, non_sales_trend_path)
     outputs["store_non_sales_trend"] = str(non_sales_trend_path)
+    store_daily_heatmap_path = PROCESSED_DIR / f"store_daily_heatmap_{team}_{ymd}.parquet"
+    write_parquet(store_daily_heatmap, store_daily_heatmap_path)
+    outputs["store_daily_heatmap"] = str(store_daily_heatmap_path)
+    weekday_time_hotspots_path = PROCESSED_DIR / f"weekday_time_hotspots_{team}_{ymd}.parquet"
+    write_parquet(weekday_time_hotspots, weekday_time_hotspots_path)
+    outputs["weekday_time_hotspots"] = str(weekday_time_hotspots_path)
     sales_good_ns_weak_path = PROCESSED_DIR / f"sales_good_non_sales_weak_{team}_{ymd}.parquet"
     write_parquet(sales_good_non_sales_weak, sales_good_ns_weak_path)
     outputs["sales_good_non_sales_weak"] = str(sales_good_ns_weak_path)
@@ -277,6 +287,8 @@ def build(path: Path, team: str = DEFAULT_TEAM, target_score: float = DEFAULT_TA
         daily_nps_trend.to_excel(writer, sheet_name="daily_nps_trend", index=False)
         nps_time_intelligence.to_excel(writer, sheet_name="time_intelligence", index=False)
         store_non_sales_trend.to_excel(writer, sheet_name="store_non_sales_trend", index=False)
+        store_daily_heatmap.to_excel(writer, sheet_name="store_daily_heatmap", index=False)
+        weekday_time_hotspots.to_excel(writer, sheet_name="weekday_time_hotspots", index=False)
         sales_good_non_sales_weak.head(EXPORT_TOP_N_STORES).to_excel(writer, sheet_name="sales_good_ns_weak", index=False)
         nps_source_recalc_diff.head(EXPORT_TOP_N_AUDIT).to_excel(writer, sheet_name="nps_recalc_audit", index=False)
         sample_warning.head(EXPORT_TOP_N_AUDIT).to_excel(writer, sheet_name="sample_warning", index=False)

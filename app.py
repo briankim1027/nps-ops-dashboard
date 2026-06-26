@@ -29,7 +29,9 @@ from nps_ops.insights import (
     build_sample_warning,
     build_sales_good_non_sales_weak,
     build_store_action_sheet,
+    build_store_daily_heatmap,
     build_store_non_sales_trend,
+    build_weekday_time_hotspots,
 )
 from nps_ops.metrics import required_promoters_to_target, sample_grade
 
@@ -66,7 +68,7 @@ html, body, [class*="css"] {font-family:'Noto Sans KR','SKT Sans Text','Apple SD
 .skt-eyebrow {font-size:12px; font-weight:800; letter-spacing:.12em; color:#E0CD4E; margin-bottom:8px;}
 .skt-title {font-size:34px; font-weight:900; letter-spacing:-.035em; margin:0 0 8px 0;}
 .skt-subtitle {font-size:15px; color:rgba(255,255,255,.82); margin:0;}
-.skt-card-grid {display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:14px; margin:8px 0 22px 0;}
+.skt-card-grid {display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:14px; margin:8px 0 22px 0;}
 .skt-metric-card {
   background:rgba(255,255,255,.94); border:1px solid rgba(129,92,246,.14); border-radius:22px;
   padding:18px 18px 16px 18px; box-shadow:0 10px 28px rgba(13,14,26,.08);
@@ -104,7 +106,7 @@ st.markdown(SKT_CSS, unsafe_allow_html=True)
 def fmt_score(v: float | int | None) -> str:
     if v is None or pd.isna(v):
         return "-"
-    return f"{float(v):.2f}"
+    return f"{float(v):.1f}"
 
 
 def axis_summary(df: pd.DataFrame, prefix: str = "") -> dict[str, float | int | None]:
@@ -171,6 +173,8 @@ nps_diff_files = sorted(PROCESSED_DIR.glob(f"nps_source_recalc_diff_{team}_*.par
 sample_warning_files = sorted(PROCESSED_DIR.glob(f"sample_warning_{team}_*.parquet"), reverse=True)
 daily_nps_trend_files = sorted(PROCESSED_DIR.glob(f"daily_nps_trend_{team}_*.parquet"), reverse=True)
 nps_time_intelligence_files = sorted(PROCESSED_DIR.glob(f"nps_time_intelligence_{team}_*.parquet"), reverse=True)
+store_daily_heatmap_files = sorted(PROCESSED_DIR.glob(f"store_daily_heatmap_{team}_*.parquet"), reverse=True)
+weekday_time_hotspots_files = sorted(PROCESSED_DIR.glob(f"weekday_time_hotspots_{team}_*.parquet"), reverse=True)
 
 if not priority_files:
     st.warning("처리된 데이터가 없습니다. 먼저 `bash scripts/run_build.sh`를 실행하세요.")
@@ -189,6 +193,8 @@ nps_source_recalc_diff = pd.read_parquet(nps_diff_files[0]) if nps_diff_files el
 sample_warning = pd.read_parquet(sample_warning_files[0]) if sample_warning_files else build_sample_warning(priority, target_score)
 daily_nps_trend = pd.read_parquet(daily_nps_trend_files[0]) if daily_nps_trend_files else build_daily_nps_trend(response, team)
 nps_time_intelligence = build_nps_time_intelligence(response, team, target_score, report_date=None) if not response.empty else (pd.read_parquet(nps_time_intelligence_files[0]) if nps_time_intelligence_files else pd.DataFrame())
+store_daily_heatmap = pd.read_parquet(store_daily_heatmap_files[0]) if store_daily_heatmap_files else build_store_daily_heatmap(response, team, axis="비판매성")
+weekday_time_hotspots = pd.read_parquet(weekday_time_hotspots_files[0]) if weekday_time_hotspots_files else build_weekday_time_hotspots(response, team, axis="비판매성")
 action_sheet = pd.read_parquet(action_sheet_files[0]) if action_sheet_files else build_store_action_sheet(
     priority,
     negative[negative["team_name"].astype(str).str.strip().eq(team)] if not negative.empty and "team_name" in negative.columns else negative,
@@ -213,6 +219,7 @@ store_non_sales_trend_view_base = apply_agency_filter(store_non_sales_trend)
 sales_good_non_sales_weak_view_base = apply_agency_filter(sales_good_non_sales_weak)
 nps_source_recalc_diff_view_base = apply_agency_filter(nps_source_recalc_diff)
 sample_warning_view_base = apply_agency_filter(sample_warning)
+store_daily_heatmap_view_base = apply_agency_filter(store_daily_heatmap)
 
 st.markdown(
     f"""
@@ -229,6 +236,84 @@ overall = axis_summary(priority, "")
 sales = axis_summary(priority, "sales_")
 non_sales = axis_summary(priority, "non_sales_")
 
+monthly_risk_store_count = 0
+if not priority.empty and "non_sales_nps_recalc" in priority.columns:
+    monthly_risk_source = priority.copy()
+    monthly_risk_source["non_sales_nps_recalc"] = pd.to_numeric(monthly_risk_source["non_sales_nps_recalc"], errors="coerce")
+    monthly_risk_source["non_sales_total_responses"] = pd.to_numeric(monthly_risk_source.get("non_sales_total_responses", 0), errors="coerce").fillna(0)
+    monthly_risk_store_count = int(((monthly_risk_source["non_sales_total_responses"] > 0) & monthly_risk_source["non_sales_nps_recalc"].lt(target_score)).sum())
+
+def count_today_risk_stores(hm: pd.DataFrame, target: float, today_value: object = None) -> int:
+    if hm.empty or "nps" not in hm.columns or "trend_date" not in hm.columns:
+        return 0
+    tmp = hm.copy()
+    tmp["trend_date"] = pd.to_datetime(tmp["trend_date"], errors="coerce").dt.normalize()
+    tmp["nps"] = pd.to_numeric(tmp["nps"], errors="coerce")
+    tmp["total_responses"] = pd.to_numeric(tmp.get("total_responses", 0), errors="coerce").fillna(0)
+    tmp = tmp[tmp["trend_date"].notna() & (tmp["total_responses"] > 0)].copy()
+    if tmp.empty:
+        return 0
+    today_ts = pd.to_datetime(today_value, errors="coerce") if today_value is not None else pd.NaT
+    target_day = today_ts.normalize() if pd.notna(today_ts) else tmp["trend_date"].max()
+    if target_day not in set(tmp["trend_date"]):
+        fallback = tmp[tmp["trend_date"].le(target_day)]["trend_date"].max()
+        target_day = fallback if pd.notna(fallback) else tmp["trend_date"].max()
+    return int(tmp[tmp["trend_date"].eq(target_day) & tmp["nps"].lt(target)]["store_name"].nunique())
+
+
+def build_trend_regression_insight(daily_trend: pd.DataFrame) -> str:
+    """Return one-line regression/correlation insight for monthly trend caption."""
+    if daily_trend.empty:
+        return "월간 Trend 상관 분석 데이터가 아직 없습니다."
+    df = daily_trend.copy()
+    df["trend_date"] = pd.to_datetime(df.get("trend_date"), errors="coerce")
+    df["total_responses"] = pd.to_numeric(df.get("total_responses"), errors="coerce")
+    df["nps"] = pd.to_numeric(df.get("nps"), errors="coerce")
+    pivot = df.pivot_table(index="trend_date", columns="axis", values=["total_responses", "nps"], aggfunc="first")
+    if pivot.empty or ("nps", "비판매성") not in pivot.columns:
+        return "비판매성 NPS와 업무량의 월간 상관 분석 데이터가 부족합니다."
+    work = pd.DataFrame(index=pivot.index)
+    work["비판매성 NPS"] = pivot[("nps", "비판매성")]
+    if ("total_responses", "판매성") in pivot.columns:
+        work["판매성 응답"] = pivot[("total_responses", "판매성")]
+    if ("total_responses", "비판매성") in pivot.columns:
+        work["비판매성 응답"] = pivot[("total_responses", "비판매성")]
+    if {"판매성 응답", "비판매성 응답"}.issubset(work.columns):
+        work["판매+비판매 총응답"] = work["판매성 응답"].fillna(0) + work["비판매성 응답"].fillna(0)
+    candidates = [c for c in ["비판매성 응답", "판매+비판매 총응답", "판매성 응답"] if c in work.columns]
+    results: dict[str, dict[str, float | str | int]] = {}
+    for xcol in candidates:
+        sub = work[[xcol, "비판매성 NPS"]].dropna()
+        sub = sub[sub[xcol] > 0]
+        if len(sub) < 5 or sub[xcol].nunique() < 2:
+            continue
+        corr = float(sub[xcol].corr(sub["비판매성 NPS"]))
+        var = float(sub[xcol].var())
+        if pd.isna(corr) or var == 0:
+            continue
+        slope = float(sub[xcol].cov(sub["비판매성 NPS"]) / var)
+        results[xcol] = {"xcol": xcol, "corr": corr, "slope10": slope * 10, "n": len(sub)}
+    if not results:
+        return "월간 일별 표본이 작아 업무량과 비판매성 NPS의 회귀 해석은 관찰 수준으로 봅니다."
+
+    def phrase(item: dict[str, float | str | int]) -> str:
+        direction = "하락" if float(item["slope10"]) < 0 else "상승"
+        return f"{item['xcol']} +10건당 {abs(float(item['slope10'])):.1f}p {direction}"
+
+    if "판매+비판매 총응답" in results and "비판매성 응답" in results:
+
+        total = results["판매+비판매 총응답"]
+        non_sales_result = results["비판매성 응답"]
+        max_corr = max(abs(float(total["corr"])), abs(float(non_sales_result["corr"])))
+        strength_msg = "상관은 약합니다" if max_corr < 0.2 else ("중간 수준의 상관이 보입니다" if max_corr < 0.5 else "강한 상관이 보입니다")
+        return f"월간 일별 회귀 기준, {phrase(total)}, {phrase(non_sales_result)}이며 업무량-비판매성 NPS {strength_msg}."
+
+    best = max(results.values(), key=lambda r: abs(float(r["corr"])))
+    strength = "강한" if abs(float(best["corr"])) >= 0.6 else ("중간" if abs(float(best["corr"])) >= 0.35 else "약한")
+    return f"월간 일별 회귀 기준, {phrase(best)}하는 {strength} 상관이 관찰됩니다."
+
+trend_regression_insight = build_trend_regression_insight(daily_nps_trend)
+
 st.markdown(
     f"""
     <div class="skt-card-grid">
@@ -237,6 +322,7 @@ st.markdown(
       <div class="skt-metric-card focus"><div class="skt-label">비판매성 NPS</div><div class="skt-value">{fmt_score(non_sales['nps'])}</div><div class="skt-note">팀 평가 집중관리 축</div></div>
       <div class="skt-metric-card"><div class="skt-label">총응답자</div><div class="skt-value">{overall['total']:,}</div><div class="skt-note">판매성 {sales['total']:,} · 비판매성 {non_sales['total']:,}</div></div>
       <div class="skt-metric-card"><div class="skt-label">중립/비추천</div><div class="skt-value">{overall['passives'] + overall['detractors']:,}</div><div class="skt-note">중립 {overall['passives']:,} · 비추천 {overall['detractors']:,}</div></div>
+      <div class="skt-metric-card focus"><div class="skt-label">월누적 위험매장</div><div class="skt-value">{monthly_risk_store_count:,}</div><div class="skt-note">비판매성 NPS 목표 미달 매장</div></div>
     </div>
     """,
     unsafe_allow_html=True,
@@ -245,7 +331,7 @@ st.markdown(
 trend_title_col, date_from_col, date_to_col = st.columns([0.58, 0.21, 0.21])
 with trend_title_col:
     st.markdown('<div class="skt-section-title">6월 NPS Trend</div>', unsafe_allow_html=True)
-    st.markdown('<div class="skt-section-caption">기본값은 6월 전체 기간입니다. 날짜를 조정해 주간/특정 기간 흐름도 함께 확인합니다.</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="skt-section-caption">{trend_regression_insight}</div>', unsafe_allow_html=True)
 
 if nps_time_intelligence.empty or daily_nps_trend.empty:
     st.info("NPS Trend 산출 데이터가 없습니다. `python scripts/build_data.py`를 다시 실행하세요.")
@@ -350,12 +436,23 @@ else:
 
     today_nps = ti.get("today_nps")
     today_gap = float(today_nps) - float(target_score) if pd.notna(today_nps) else None
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("오늘 종합 NPS", fmt_score(today_nps), None if today_gap is None else f"{today_gap:+.1f}p vs 목표")
-    c2.metric("오늘 판매성 NPS", fmt_score(ti.get("today_sales_nps")))
-    c3.metric("오늘 비판매성 NPS", fmt_score(ti.get("today_non_sales_nps")))
-    c4.metric("오늘 응답건수", f"{int(ti.get('today_total_responses', 0) or 0):,}")
-    c5.metric("오늘 중립/비추천", f"{int(ti.get('today_risk_count', 0) or 0):,}")
+    today_risk_store_count = count_today_risk_stores(store_daily_heatmap_view_base, target_score, ti.get("today_date"))
+    today_gap_note = "-" if today_gap is None else f"{today_gap:+.1f}p vs 목표"
+    today_total_responses = int(ti.get('today_total_responses', 0) or 0)
+    today_risk_count = int(ti.get('today_risk_count', 0) or 0)
+    st.markdown(
+        f"""
+        <div class="skt-card-grid">
+          <div class="skt-metric-card"><div class="skt-label">오늘 종합 NPS</div><div class="skt-value">{fmt_score(today_nps)}</div><div class="skt-note">{today_gap_note}</div></div>
+          <div class="skt-metric-card"><div class="skt-label">오늘 판매성 NPS</div><div class="skt-value">{fmt_score(ti.get('today_sales_nps'))}</div><div class="skt-note">최신 업무처리일 기준</div></div>
+          <div class="skt-metric-card focus"><div class="skt-label">오늘 비판매성 NPS</div><div class="skt-value">{fmt_score(ti.get('today_non_sales_nps'))}</div><div class="skt-note">팀 평가 집중관리 축</div></div>
+          <div class="skt-metric-card"><div class="skt-label">오늘 응답건수</div><div class="skt-value">{today_total_responses:,}</div><div class="skt-note">판매성/비판매성 합산</div></div>
+          <div class="skt-metric-card"><div class="skt-label">오늘 중립/비추천</div><div class="skt-value">{today_risk_count:,}</div><div class="skt-note">당일 Risk 응답 수</div></div>
+          <div class="skt-metric-card focus"><div class="skt-label">오늘 위험매장</div><div class="skt-value">{today_risk_store_count:,}</div><div class="skt-note">비판매성 목표 미달</div></div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 legend_html = """
 <div class="skt-help-box">
@@ -367,8 +464,6 @@ legend_html = """
     <div class="skt-help-item"><span class="skt-chip">비판매성 취약형</span>판매성은 목표 이상이나 비판매성 NPS가 목표 미달인 매장. 팀 평가 대응 관점에서 별도 관리.</div>
     <div class="skt-help-item"><span class="skt-chip gray">판매성 취약형</span>비판매성은 목표 이상이나 판매성 NPS가 목표 미달인 매장. 판매 상담/가입·기변 과정 점검 대상.</div>
     <div class="skt-help-item"><span class="skt-chip green">우수 확산형</span>목표 이상이며 응답 샘플이 일정 수준 이상인 매장. 우수 응대 패턴 확산 후보.</div>
-    <div class="skt-help-item"><span class="skt-chip gray">샘플 착시형</span>총응답 5건 미만. 점수보다 추가 샘플 확보 후 판단.</div>
-    <div class="skt-help-item"><span class="skt-chip gray">관찰/유지형</span>즉시 개입 신호는 약하나 추세 관찰이 필요한 매장.</div>
   </div>
 </div>
 """
@@ -379,6 +474,189 @@ priority_formula_html = f"""
   <div>해석: 비추천과 중립의 절대량을 가장 크게 보고, 목표 87점까지 회복에 필요한 추천수와 샘플 충분성을 함께 반영합니다. 점수가 높을수록 먼저 확인해야 할 매장입니다.</div>
 </div>
 """
+
+risk_score_formula_html = f"""
+<div class="skt-priority-note">
+  <div class="skt-formula">Care Priority = 비추천×10 + 중립×3 + 목표까지 필요추천수×2 + min(비판매성 응답,30)/10 + 목표미달Gap절대값/10</div>
+  <div>Risk Map/Top 20은 비판매성 축 기준입니다. 관찰/유지형·샘플착시형은 범례에서 제외해 실제 케어 후보와 우수 확산 후보만 먼저 보이도록 했습니다.</div>
+</div>
+"""
+
+st.markdown('<div class="skt-section-title">매장 NPS Risk Map — 6월 월누적 기준</div>', unsafe_allow_html=True)
+st.markdown('<div class="skt-section-caption">X축=비판매성 응답 수 · Y축=비판매성 NPS · Bubble=전체 응답건수로 매장별 월누적 risk를 포지셔닝합니다.</div>', unsafe_allow_html=True)
+
+risk_excluded_types = {"관찰/유지형", "샘플 착시형"}
+risk_map = priority_view_base.copy()
+for c in ["non_sales_total_responses", "total_responses", "non_sales_nps_recalc", "priority_score"]:
+    risk_map[c] = pd.to_numeric(risk_map.get(c, 0), errors="coerce").fillna(0)
+risk_map = risk_map[(risk_map["total_responses"] > 0) & ~risk_map.get("diagnosis_type", "").astype(str).isin(risk_excluded_types)].copy()
+if risk_map.empty:
+    st.info("Risk Map에 표시할 매장 데이터가 없습니다.")
+else:
+    risk_map["비판매성 응답비중"] = risk_map["non_sales_total_responses"] / risk_map["total_responses"].where(risk_map["total_responses"] != 0, pd.NA)
+    risk_map["non_sales_nps_display"] = risk_map["non_sales_nps_recalc"].map(
+        lambda v: v if pd.isna(v) or v >= 0 else v * 0.2
+    )
+    x_threshold = float(risk_map["non_sales_total_responses"].median()) if not risk_map.empty else 0.0
+    x_max = max(float(risk_map["non_sales_total_responses"].max()), x_threshold, 1.0)
+    x_upper = x_max * 1.12
+    target_display = target_score if target_score >= 0 else target_score * 0.2
+    zone_label_y_top = 103
+    zone_label_y_bottom = -18
+    zone_label_x_left = max(x_threshold * 0.45, x_upper * 0.14)
+    zone_label_x_right = x_threshold + (x_upper - x_threshold) * 0.55
+
+    fig = px.scatter(
+        risk_map,
+        x="non_sales_total_responses",
+        y="non_sales_nps_display",
+        size="total_responses",
+        color="diagnosis_type",
+        hover_name="store_name",
+        custom_data=[
+            "agency_name",
+            "total_responses",
+            "non_sales_total_responses",
+            "non_sales_nps_recalc",
+            "detractors",
+            "passives",
+            "priority_score",
+            "비판매성 응답비중",
+        ],
+        color_discrete_sequence=["#DC6339", "#C045F6", "#E0CD4E", "#815CF6", "#249A45", "#6B7280"],
+        labels={"non_sales_total_responses": "비판매성 응답 수", "non_sales_nps_display": "비판매성 NPS · 음수구간 압축", "diagnosis_type": "Care 등급"},
+    )
+    fig.update_traces(
+        hovertemplate=(
+            "<b>%{hovertext}</b><br>"
+            "Care 등급=%{fullData.name}<br>"
+            "대리점=%{customdata[0]}<br>"
+            "비판매성 응답 수=%{customdata[2]:,}<br>"
+            "비판매성 NPS=%{customdata[3]:.1f}<br>"
+            "전체 응답건수(Bubble)=%{customdata[1]:,}<br>"
+            "비추천=%{customdata[4]:,} · 중립=%{customdata[5]:,}<br>"
+            "Care Priority=%{customdata[6]:.1f}<br>"
+            "비판매성 응답비중=%{customdata[7]:.1%}<extra></extra>"
+        )
+    )
+    fig.add_vrect(x0=0, x1=x_threshold, fillcolor="#5FCE73", opacity=0.045, line_width=0, layer="below")
+    fig.add_vrect(x0=x_threshold, x1=x_upper, fillcolor="#DC6339", opacity=0.045, line_width=0, layer="below")
+    fig.add_hrect(y0=-22, y1=target_display, fillcolor="#DC6339", opacity=0.055, line_width=0, layer="below")
+    fig.add_hrect(y0=target_display, y1=105, fillcolor="#5FCE73", opacity=0.035, line_width=0, layer="below")
+    fig.add_hline(y=target_display, line_dash="dash", line_color="#111111", annotation_text=f"목표 {target_score:.0f}")
+    fig.add_vline(x=x_threshold, line_dash="dot", line_color="rgba(17,17,17,0.55)")
+    for text, x, y in [
+        ("안정/우수", zone_label_x_left, zone_label_y_top),
+        ("우수 확산·과부하 경계", zone_label_x_right, zone_label_y_top),
+        ("샘플/VOC 확인", zone_label_x_left, zone_label_y_bottom),
+        (f"비판매성 응답 중앙값 {x_threshold:.0f}건", x_threshold, zone_label_y_bottom),
+        ("즉시 개선 후보", zone_label_x_right, zone_label_y_bottom),
+    ]:
+        fig.add_annotation(
+            x=x,
+            y=y,
+            text=text,
+            showarrow=False,
+            font=dict(size=12, color="rgba(17,17,17,0.58)"),
+            bgcolor="rgba(255,255,255,0.68)",
+            bordercolor="rgba(148,163,184,0.25)",
+            borderpad=4,
+        )
+    fig.update_layout(
+        height=600,
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        legend_title_text=None,
+        legend=dict(orientation="h", x=0, xanchor="left", y=1.20, yanchor="bottom", itemsizing="constant"),
+        margin=dict(l=10, r=10, t=112, b=40),
+        xaxis=dict(range=[0, x_upper], title="비판매성 응답 수", gridcolor="rgba(148,163,184,0.20)"),
+        yaxis=dict(
+            range=[-22, 105],
+            title="비판매성 NPS · 음수구간 압축",
+            tickmode="array",
+            tickvals=[-20, -10, 0, 20, 40, 60, 80, 100],
+            ticktext=["-100", "-50", "0", "20", "40", "60", "80", "100"],
+            gridcolor="rgba(148,163,184,0.20)",
+        ),
+    )
+    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+
+top_bar = prepare_axis_table(priority_view_base, "비판매성 NPS", target_score)
+top_bar = top_bar[~top_bar.get("diagnosis_type", "").astype(str).isin(risk_excluded_types)].head(20)
+if top_bar.empty:
+    st.info("Risk Score Top N 데이터가 없습니다.")
+else:
+    fig = px.bar(
+        top_bar.sort_values("선택축_priority_score", ascending=True),
+        x="선택축_priority_score",
+        y="store_name",
+        orientation="h",
+        color="diagnosis_type",
+        text="선택축_priority_score",
+        hover_data={"agency_name": True, "선택축_NPS": ":.1f", "선택축_총응답자": ":,", "선택축_비추천": ":,"},
+        color_discrete_sequence=["#DC6339", "#C045F6", "#E0CD4E", "#815CF6", "#249A45", "#6B7280"],
+        labels={"선택축_priority_score": "Care Priority", "store_name": "매장", "diagnosis_type": "Care 등급"},
+    )
+    fig.update_traces(texttemplate="%{text:.1f}", textposition="outside")
+    fig.update_layout(height=520, showlegend=False, plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", xaxis_title="Care Priority", yaxis_title=None, margin=dict(l=10, r=10, t=20, b=10))
+    st.plotly_chart(fig, use_container_width=True)
+
+st.markdown(risk_score_formula_html, unsafe_allow_html=True)
+
+st.markdown('<div class="skt-section-title">NPS Hot Spot Mesh</div>', unsafe_allow_html=True)
+st.markdown('<div class="skt-section-caption">날짜×매장 heatmap과 요일×시간대 hotspot을 크게 나눠 봅니다.</div>', unsafe_allow_html=True)
+if store_daily_heatmap_view_base.empty:
+    st.info("날짜×매장 heatmap 데이터가 없습니다.")
+else:
+    hm = store_daily_heatmap_view_base.copy()
+    hm["trend_date"] = pd.to_datetime(hm["trend_date"], errors="coerce")
+    hm = hm[hm["trend_date"].notna()].copy()
+    hm["date_label"] = hm["trend_date"].dt.strftime("%m/%d")
+    store_rank = hm.groupby("store_name", dropna=False).agg(total_responses=("total_responses", "sum"), risk_count=("risk_count", "sum")).reset_index()
+    store_rank = store_rank.sort_values(["risk_count", "total_responses"], ascending=False).head(25)
+    hm = hm[hm["store_name"].isin(store_rank["store_name"])]
+    date_order = hm.sort_values("trend_date")["date_label"].drop_duplicates().tolist()
+    store_order = store_rank["store_name"].tolist()[::-1]
+    fig = px.density_heatmap(
+        hm,
+        x="date_label",
+        y="store_name",
+        z="risk_count",
+        histfunc="sum",
+        category_orders={"date_label": date_order, "store_name": store_order},
+        color_continuous_scale=[[0, "#F5F3FF"], [0.45, "#E0CD4E"], [1, "#DC6339"]],
+        labels={"date_label": "업무처리일", "store_name": "매장", "risk_count": "중립/비추천"},
+    )
+    fig.update_layout(height=560, plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", margin=dict(l=10, r=10, t=20, b=10), coloraxis_colorbar_title="Risk건수")
+    st.plotly_chart(fig, use_container_width=True)
+
+if weekday_time_hotspots.empty:
+    st.info("요일×시간대 hotspot 데이터가 없습니다.")
+else:
+    wh = weekday_time_hotspots.copy()
+    wh["has_time_detail"] = wh["has_time_detail"].astype(bool)
+    if wh["has_time_detail"].any():
+        wh = wh[wh["has_time_detail"]].copy()
+        weekday_order = ["월", "화", "수", "목", "금", "토", "일"]
+        bucket_order = ["오전(09-12)", "점심(12-14)", "오후(14-17)", "저녁(17-21)"]
+        fig = px.density_heatmap(
+            wh,
+            x="time_bucket",
+            y="weekday",
+            z="hotspot_score",
+            histfunc="sum",
+            category_orders={"weekday": weekday_order[::-1], "time_bucket": bucket_order},
+            color_continuous_scale=[[0, "#F5F3FF"], [0.55, "#E0CD4E"], [1, "#DC6339"]],
+            labels={"time_bucket": "4개 시간대", "weekday": "요일", "hotspot_score": "Hotspot"},
+        )
+        fig.update_layout(height=520, plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", margin=dict(l=10, r=10, t=20, b=10), coloraxis_colorbar_title="Hotspot")
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        wd = wh.groupby(["weekday_idx", "weekday"], as_index=False).agg(total_responses=("total_responses", "sum"), risk_count=("risk_count", "sum"), hotspot_score=("hotspot_score", "sum"))
+        wd = wd.sort_values("weekday_idx")
+        fig = px.bar(wd, x="weekday", y="total_responses", color="risk_count", color_continuous_scale=[[0, "#815CF6"], [1, "#DC6339"]], labels={"weekday": "요일", "total_responses": "비판매성 응답", "risk_count": "Risk건수"})
+        fig.update_layout(height=520, plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", margin=dict(l=10, r=10, t=20, b=10))
+        st.plotly_chart(fig, use_container_width=True)
 
 st.markdown('<div class="skt-section-title">매장 개입 우선순위</div>', unsafe_allow_html=True)
 st.markdown('<div class="skt-section-caption">기본 판세는 종합 NPS로 보고, 우측 탭에서 판매성/비판매성 축으로 같은 매장을 재정렬합니다.</div>', unsafe_allow_html=True)
@@ -403,8 +681,8 @@ for tab, axis in zip(tabs, ["종합 NPS", "판매성 NPS", "비판매성 NPS"]):
             use_container_width=True,
             hide_index=True,
             column_config={
-                "NPS": st.column_config.NumberColumn("NPS", format="%.2f"),
-                "목표Gap": st.column_config.NumberColumn("목표Gap", format="%.2f"),
+                "NPS": st.column_config.NumberColumn("NPS", format="%.1f"),
+                "목표Gap": st.column_config.NumberColumn("목표Gap", format="%.1f"),
                 "우선순위점수": st.column_config.NumberColumn("우선순위점수", format="%.1f"),
             },
         )
@@ -427,8 +705,8 @@ with ns_tab1:
             "focus_reason": "집중관리 사유", "axis_priority_score": "우선순위점수",
         })
         st.dataframe(ns_view, use_container_width=True, hide_index=True, column_config={
-            "비판매성 NPS": st.column_config.NumberColumn("비판매성 NPS", format="%.2f"),
-            "목표Gap": st.column_config.NumberColumn("목표Gap", format="%.2f"),
+            "비판매성 NPS": st.column_config.NumberColumn("비판매성 NPS", format="%.1f"),
+            "목표Gap": st.column_config.NumberColumn("목표Gap", format="%.1f"),
             "우선순위점수": st.column_config.NumberColumn("우선순위점수", format="%.1f"),
         })
 with ns_tab2:
@@ -445,7 +723,7 @@ with ns_tab2:
         fig.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", xaxis_title="비판매성 업무유형", yaxis_title="Risk건수")
         st.plotly_chart(fig, use_container_width=True)
         st.dataframe(type_view, use_container_width=True, hide_index=True, column_config={
-            "NPS": st.column_config.NumberColumn("NPS", format="%.2f"),
+            "NPS": st.column_config.NumberColumn("NPS", format="%.1f"),
             "Risk비중(%)": st.column_config.NumberColumn("Risk비중(%)", format="%.1f"),
         })
 with ns_tab3:
@@ -495,7 +773,7 @@ with ns_tab3:
             )
             st.plotly_chart(fig, use_container_width=True)
             trend_view = trend_plot.drop(columns=["trend_label", "hover_date", "nps_display"]).rename(columns={"trend_date": "일자", "agency_name": "대리점", "store_name": "매장", "total_responses": "응답", "promoters": "추천", "passives": "중립", "detractors": "비추천", "nps": "비판매성 NPS", "risk_count": "Risk건수"})
-            st.dataframe(trend_view, use_container_width=True, hide_index=True, column_config={"비판매성 NPS": st.column_config.NumberColumn("비판매성 NPS", format="%.2f")})
+            st.dataframe(trend_view, use_container_width=True, hide_index=True, column_config={"비판매성 NPS": st.column_config.NumberColumn("비판매성 NPS", format="%.1f")})
 with ns_tab4:
     if sales_good_non_sales_weak_view_base.empty:
         st.success("현재 기준 판매성은 양호하지만 비판매성만 낮은 별도 분리 대상이 없습니다.")
@@ -507,10 +785,10 @@ with ns_tab4:
             "axis_passives": "비판매성 중립", "axis_detractors": "비판매성 비추천", "axis_required_promoters": "필요추천수", "axis_priority_score": "우선순위점수",
         })
         st.dataframe(weak_view, use_container_width=True, hide_index=True, column_config={
-            "판매성 NPS": st.column_config.NumberColumn("판매성 NPS", format="%.2f"),
-            "비판매성 NPS": st.column_config.NumberColumn("비판매성 NPS", format="%.2f"),
-            "비판매성 NPS(응답재계산)": st.column_config.NumberColumn("비판매성 NPS(응답재계산)", format="%.2f"),
-            "비판매성 목표Gap": st.column_config.NumberColumn("비판매성 목표Gap", format="%.2f"),
+            "판매성 NPS": st.column_config.NumberColumn("판매성 NPS", format="%.1f"),
+            "비판매성 NPS": st.column_config.NumberColumn("비판매성 NPS", format="%.1f"),
+            "비판매성 NPS(응답재계산)": st.column_config.NumberColumn("비판매성 NPS(응답재계산)", format="%.1f"),
+            "비판매성 목표Gap": st.column_config.NumberColumn("비판매성 목표Gap", format="%.1f"),
             "우선순위점수": st.column_config.NumberColumn("우선순위점수", format="%.1f"),
         })
 
@@ -528,8 +806,8 @@ else:
     }
     action_view = action_source.rename(columns=action_rename)
     st.dataframe(action_view, use_container_width=True, hide_index=True, column_config={
-        "비판매성 NPS": st.column_config.NumberColumn("비판매성 NPS", format="%.2f"),
-        "목표Gap": st.column_config.NumberColumn("목표Gap", format="%.2f"),
+        "비판매성 NPS": st.column_config.NumberColumn("비판매성 NPS", format="%.1f"),
+        "목표Gap": st.column_config.NumberColumn("목표Gap", format="%.1f"),
         "우선순위점수": st.column_config.NumberColumn("우선순위점수", format="%.1f"),
     })
     dl_col1, dl_col2 = st.columns(2)
@@ -562,10 +840,10 @@ with audit_tab1:
             "diagnosis_type": "종합진단",
         })
         st.dataframe(diff_view, use_container_width=True, hide_index=True, column_config={
-            "원천 NPS": st.column_config.NumberColumn("원천 NPS", format="%.2f"),
-            "재계산 NPS": st.column_config.NumberColumn("재계산 NPS", format="%.2f"),
-            "차이": st.column_config.NumberColumn("차이", format="%.2f"),
-            "차이절대값": st.column_config.NumberColumn("차이절대값", format="%.2f"),
+            "원천 NPS": st.column_config.NumberColumn("원천 NPS", format="%.1f"),
+            "재계산 NPS": st.column_config.NumberColumn("재계산 NPS", format="%.1f"),
+            "차이": st.column_config.NumberColumn("차이", format="%.1f"),
+            "차이절대값": st.column_config.NumberColumn("차이절대값", format="%.1f"),
         })
 with audit_tab2:
     if sample_warning_view_base.empty:
@@ -578,7 +856,7 @@ with audit_tab2:
             "diagnosis_type": "종합진단",
         })
         st.dataframe(sample_view, use_container_width=True, hide_index=True, column_config={
-            "재계산 NPS": st.column_config.NumberColumn("재계산 NPS", format="%.2f"),
+            "재계산 NPS": st.column_config.NumberColumn("재계산 NPS", format="%.1f"),
         })
 
 left, right = st.columns(2)
@@ -663,9 +941,8 @@ else:
         use_container_width=True,
         hide_index=True,
         column_config={
-            "NPS": st.column_config.NumberColumn("NPS", format="%.2f"),
-            "목표Gap": st.column_config.NumberColumn("목표Gap", format="%.2f"),
+            "NPS": st.column_config.NumberColumn("NPS", format="%.1f"),
+            "목표Gap": st.column_config.NumberColumn("목표Gap", format="%.1f"),
             "코칭우선점수": st.column_config.NumberColumn("코칭우선점수", format="%.1f"),
         },
     )
-

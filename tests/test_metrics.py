@@ -17,6 +17,8 @@ from nps_ops.insights import (
     build_nps_source_recalc_diff,
     build_nps_time_intelligence,
     build_sample_warning,
+    build_store_daily_heatmap,
+    build_weekday_time_hotspots,
 )
 from nps_ops.metrics import build_store_priority, diagnose_store, normalize_nps_series
 from scripts.build_data import find_latest_file, validate_response_contract
@@ -228,6 +230,36 @@ class MetricsScaleTest(unittest.TestCase):
         self.assertIn("이번 주 종합 NPS", row["weekly_situation"])
         self.assertIn("전일 대비", row["recent_change"])
         self.assertIn("표본", row["action_point"])
+
+    def test_store_daily_heatmap_aggregates_non_sales_by_date_and_store(self) -> None:
+        fact = pd.DataFrame([
+            {"team_name": "전북", "NCSI": "비판매성", "process_date": "2026-06-22", "agency_name": "A", "store_code": "S1", "store_name": "매장1", "promoter_flag": 1, "passive_flag": 0, "detractor_flag": 0},
+            {"team_name": "전북", "NCSI": "비판매성", "process_date": "2026-06-22", "agency_name": "A", "store_code": "S1", "store_name": "매장1", "promoter_flag": 0, "passive_flag": 0, "detractor_flag": 1},
+            {"team_name": "전북", "NCSI": "판매성", "process_date": "2026-06-22", "agency_name": "A", "store_code": "S1", "store_name": "매장1", "promoter_flag": 1, "passive_flag": 0, "detractor_flag": 0},
+        ])
+        heatmap = build_store_daily_heatmap(fact, team="전북", axis="비판매성")
+        self.assertEqual(len(heatmap), 1)
+        row = heatmap.iloc[0]
+        self.assertEqual(row["total_responses"], 2)
+        self.assertEqual(row["risk_count"], 1)
+        self.assertAlmostEqual(row["nps"], 0.0)
+
+    def test_weekday_time_hotspots_uses_four_time_buckets_when_time_exists(self) -> None:
+        fact = pd.DataFrame([
+            {"team_name": "전북", "NCSI": "비판매성", "process_date": "2026-06-22 10:15:00", "promoter_flag": 1, "passive_flag": 0, "detractor_flag": 0},
+            {"team_name": "전북", "NCSI": "비판매성", "process_date": "2026-06-22 15:20:00", "promoter_flag": 0, "passive_flag": 1, "detractor_flag": 0},
+        ])
+        hotspots = build_weekday_time_hotspots(fact, team="전북", axis="비판매성")
+        self.assertEqual(set(hotspots["time_bucket"]), {"오전(09-12)", "오후(14-17)"})
+        self.assertTrue(hotspots["has_time_detail"].all())
+
+    def test_weekday_time_hotspots_marks_missing_time_detail_for_date_only_source(self) -> None:
+        fact = pd.DataFrame([
+            {"team_name": "전북", "NCSI": "비판매성", "process_date": "2026-06-22", "promoter_flag": 1, "passive_flag": 0, "detractor_flag": 0},
+        ])
+        hotspots = build_weekday_time_hotspots(fact, team="전북", axis="비판매성")
+        self.assertEqual(hotspots.iloc[0]["time_bucket"], "시간정보 없음")
+        self.assertFalse(bool(hotspots.iloc[0]["has_time_detail"]))
 
 
 if __name__ == "__main__":

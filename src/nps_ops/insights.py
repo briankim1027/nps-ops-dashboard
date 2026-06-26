@@ -502,6 +502,118 @@ def build_sample_warning(store_priority: pd.DataFrame, target_score: float, min_
     return out.sort_values(["axis_total_responses", "risk_count", "recalc_nps"], ascending=[True, False, True])
 
 
+def build_store_daily_heatmap(response_fact: pd.DataFrame, team: str = "전북", axis: str = "비판매성") -> pd.DataFrame:
+    """Build date × store NPS heatmap data.
+
+    The heatmap is response-ledger based. It shows whether risk is concentrated in
+    one store, one agency cluster, or one operating date before the user opens the
+    detailed table.
+    """
+    df = _prepare_team_response_fact(response_fact, team)
+    if df.empty:
+        return pd.DataFrame()
+    if axis != "종합" and "NCSI" in df.columns:
+        df = df[df["NCSI"].astype(str).str.strip().eq(axis)].copy()
+    if df.empty:
+        return pd.DataFrame()
+    for c in ["agency_name", "store_code", "store_name"]:
+        if c not in df.columns:
+            df[c] = ""
+    out = (
+        df.groupby(["trend_date", "agency_name", "store_code", "store_name"], dropna=False)
+        .agg(
+            promoters=("promoter_flag", "sum"),
+            passives=("passive_flag", "sum"),
+            detractors=("detractor_flag", "sum"),
+            total_responses=("promoter_flag", "size"),
+        )
+        .reset_index()
+    )
+    out["axis"] = axis
+    out["nps"] = out.apply(lambda r: nps_score(r.promoters, r.detractors, r.total_responses), axis=1)
+    out["risk_count"] = out["passives"] + out["detractors"]
+    out["risk_rate"] = out["risk_count"] / out["total_responses"].where(out["total_responses"] != 0, pd.NA)
+    return out.sort_values(["trend_date", "agency_name", "store_name"])
+
+
+def _extract_response_datetime(df: pd.DataFrame) -> pd.Series:
+    """Return best-effort customer visit/process datetime for time-bucket hotspots.
+
+    Current NPS workbooks often expose only dates. Future files may add a timestamp
+    column; this helper accepts common Korean/English names and also preserves hour
+    and minute if existing process/evaluation date columns contain them.
+    """
+    candidate_cols = [
+        "visit_datetime", "visit_time", "process_datetime", "process_time", "response_datetime", "response_time",
+        "고객방문일시", "고객방문시간", "방문일시", "방문시간", "처리일시", "처리시간", "응답일시", "응답시간",
+        "process_date", "evaluation_date", "report_date",
+    ]
+    for c in candidate_cols:
+        if c in df.columns:
+            s = pd.to_datetime(df[c], errors="coerce")
+            if s.notna().any():
+                return s
+    return pd.Series(pd.NaT, index=df.index)
+
+
+def _time_bucket(ts: pd.Timestamp | Any) -> str:
+    if pd.isna(ts):
+        return "시간정보 없음"
+    timestamp = pd.Timestamp(ts)
+    if timestamp.time() == pd.Timestamp("00:00:00").time():
+        return "시간정보 없음"
+    hour = int(timestamp.hour)
+    if 9 <= hour < 12:
+        return "오전(09-12)"
+    if 12 <= hour < 14:
+        return "점심(12-14)"
+    if 14 <= hour < 17:
+        return "오후(14-17)"
+    if 17 <= hour < 21:
+        return "저녁(17-21)"
+    return "기타시간"
+
+
+def build_weekday_time_hotspots(response_fact: pd.DataFrame, team: str = "전북", axis: str = "비판매성") -> pd.DataFrame:
+    """Build weekday × 4 time-bucket workload/risk hotspot data.
+
+    If the source only has dates, rows are returned with `has_time_detail=False` and
+    `time_bucket='시간정보 없음'`. The dashboard then shows the data-contract message
+    instead of pretending a four-bucket visit pattern exists.
+    """
+    df = _prepare_team_response_fact(response_fact, team)
+    if df.empty:
+        return pd.DataFrame()
+    if axis != "종합" and "NCSI" in df.columns:
+        df = df[df["NCSI"].astype(str).str.strip().eq(axis)].copy()
+    if df.empty:
+        return pd.DataFrame()
+    dt = _extract_response_datetime(df)
+    df = df.assign(response_datetime=dt)
+    df["weekday_idx"] = df["trend_date"].dt.weekday
+    weekday_map = {0: "월", 1: "화", 2: "수", 3: "목", 4: "금", 5: "토", 6: "일"}
+    df["weekday"] = df["weekday_idx"].map(weekday_map)
+    df["time_bucket"] = df["response_datetime"].apply(_time_bucket)
+    midnight = pd.Timestamp("00:00:00").time()
+    df["has_time_detail"] = df["response_datetime"].notna() & df["response_datetime"].dt.time.ne(midnight)
+    out = (
+        df.groupby(["weekday_idx", "weekday", "time_bucket", "has_time_detail"], dropna=False)
+        .agg(
+            promoters=("promoter_flag", "sum"),
+            passives=("passive_flag", "sum"),
+            detractors=("detractor_flag", "sum"),
+            total_responses=("promoter_flag", "size"),
+        )
+        .reset_index()
+    )
+    out["axis"] = axis
+    out["nps"] = out.apply(lambda r: nps_score(r.promoters, r.detractors, r.total_responses), axis=1)
+    out["risk_count"] = out["passives"] + out["detractors"]
+    nps_for_score = pd.to_numeric(out["nps"], errors="coerce").fillna(100).clip(upper=87)
+    out["hotspot_score"] = out["total_responses"] + out["risk_count"] * 3 + (87 - nps_for_score) / 20
+    return out.sort_values(["weekday_idx", "time_bucket"])
+
+
 def build_store_action_sheet(store_priority: pd.DataFrame, negative: pd.DataFrame, target_score: float) -> pd.DataFrame:
     base = build_non_sales_drilldown(store_priority, target_score).copy()
     neg = add_voc_classification(negative)
