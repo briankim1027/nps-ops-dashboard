@@ -657,3 +657,189 @@ def build_store_action_sheet(store_priority: pd.DataFrame, negative: pd.DataFram
         "representative_voc", "이번주_액션", "이번주_확인사항", "axis_priority_score",
     ]
     return base[[c for c in out_cols if c in base.columns]].sort_values("axis_priority_score", ascending=False)
+
+
+# Diagnosis types that get a single-store Action Card (priority order).
+ACTION_CARD_TYPES = ["즉시 개선형", "비판매성 취약형", "구조 개선형"]
+
+# "No-issue" passive comments ("불편한 점 없었습니다", "불편하지 않았습니다" 류) are not usable
+# evidence on a care card. The negated subject (불편/문제/이상) must be matched so genuine
+# complaints like "친절하지 않았어요"(=불친절) survive.
+NO_ISSUE_RE = re.compile(r"없었|없어요|없습니다|없음|괜찮|만족스러|(?:불편|문제|이상|특별히|딱히).{0,5}(?:없|않)")
+
+
+def build_store_daily_lookup(response_fact: pd.DataFrame, team: str = "전북") -> dict:
+    """Per-store recent-7-day and latest-day NPS inputs from the response ledger.
+
+    Returns {store_code: {"today": (promoters, detractors, total),
+                          "recent7": (promoters, detractors, total)}}.
+    Latest day = max 업무처리일자 in the ledger; recent7 = trailing 7-day window ending there.
+    """
+    df = _prepare_team_response_fact(response_fact, team)
+    if df.empty or "store_code" not in df.columns:
+        return {}
+    df = df.copy()
+    df["store_code"] = df["store_code"].astype(str).str.strip()
+    max_date = df["trend_date"].max()
+    recent7_start = max_date - pd.Timedelta(days=6)
+    out: dict[str, dict[str, tuple[int, int, int]]] = {}
+    for code, g in df.groupby("store_code"):
+        today = g[g["trend_date"].eq(max_date)]
+        recent = g[g["trend_date"].ge(recent7_start)]
+        out[code] = {
+            "today": (int(today["promoter_flag"].sum()), int(today["detractor_flag"].sum()), int(len(today))),
+            "recent7": (int(recent["promoter_flag"].sum()), int(recent["detractor_flag"].sum()), int(len(recent))),
+        }
+    return out
+
+
+def _nps_from_counts(promoters: int, detractors: int, total: int) -> float | None:
+    return nps_score(promoters, detractors, total) if total else None
+
+
+def _trend_arrow(month: float | None, recent7: float | None, today: float | None) -> str:
+    """Direction of the most recent movement vs the month baseline."""
+    latest = today if today is not None else recent7
+    if latest is None or month is None or pd.isna(latest) or pd.isna(month):
+        return "–"
+    if latest < month - 1:
+        return "▼"
+    if latest > month + 1:
+        return "▲"
+    return "→"
+
+
+def _card_business_top(scope: pd.DataFrame, limit: int = 3) -> list[tuple[str, int]]:
+    if scope.empty or "business_type" not in scope.columns:
+        return []
+    bt = (
+        scope.assign(business_type=scope["business_type"].fillna("미분류").astype(str).str.strip().replace("", "미분류"))
+        .groupby("business_type")
+        .size()
+        .sort_values(ascending=False)
+        .head(limit)
+    )
+    return [(str(k), int(v)) for k, v in bt.items()]
+
+
+def _card_actions(dtype: str, ctx: dict) -> tuple[list[str], str, str]:
+    """Rule-based, type-specific action checklist + quantitative goal + verify metric."""
+    top_biz = ctx["top_biz"]
+    top_voc = ctx["top_voc"]
+    detractors = ctx["detractors"]
+    passives = ctx["passives"]
+    req = ctx["req"]
+    rep_voc = ctx["rep_voc"]
+    hint = ctx["coaching_hint"]
+    risk_count = ctx["risk_count"]
+    non_sales_nps = ctx["non_sales_nps"]
+    target = ctx["target"]
+
+    actions: list[str] = []
+    if dtype == "즉시 개선형":
+        actions.append(f"{top_biz} 비추천 {detractors}건 전수 확인 — {top_voc} 기준 처리완료·안내 멘트 재점검")
+        if rep_voc:
+            actions.append(f"“{rep_voc[:45]}” 케이스 직접 클로징")
+        quant = f"비추천 {detractors} → 0  (필요추천 {req}건이면 목표 도달)"
+        verify = "다음주 동일 업무유형 비추천 0건"
+    elif dtype == "비판매성 취약형":
+        actions.append(f"{top_biz} 중립 {passives}건 추천 전환 — 설명 누락·대기 안내·마무리 확인 점검")
+        actions.append(f"비판매 응대 루틴 1개 표준화 (코칭: {hint})")
+        ns = f"{float(non_sales_nps):.0f}" if non_sales_nps is not None and pd.notna(non_sales_nps) else "-"
+        if passives > 0:
+            quant = f"추천 {req}건 확보 시 목표 — 중립 {passives}건 우선 전환 대상"
+        else:
+            quant = f"추천 {req}건 확보 시 목표 도달"
+        verify = f"비판매성 NPS {ns} → {target:.0f}"
+    else:  # 구조 개선형
+        actions.append("판매성·비판매성 동시 약점 — 대리점 단위 합동 점검 요청")
+        actions.append(f"{top_biz} 포함 Risk {risk_count}건 원인 분류 (응대/처리/대기)")
+        quant = f"이달 {req}건 + 다음달 분할 — 단월 회복 아님, 2개월 로드맵"
+        verify = "양축 목표Gap 동시 축소 여부"
+    return actions, quant, verify
+
+
+def build_store_action_card(store_row: pd.Series, store_negative: pd.DataFrame, daily_lookup: dict, target_score: float) -> dict:
+    """Build a single-store Action Card payload (4-zone) for the type-grouped UI."""
+    code = str(store_row.get("store_code", "")).strip()
+    dtype = str(store_row.get("diagnosis_type", ""))
+    neg = store_negative.copy() if store_negative is not None else pd.DataFrame()
+
+    # ② state
+    month_nps = store_row.get("nps_recalc")
+    month_nps = float(month_nps) if pd.notna(month_nps) else None
+    daily = daily_lookup.get(code, {})
+    r7p, r7d, r7t = daily.get("recent7", (0, 0, 0))
+    tdp, tdd, tdt = daily.get("today", (0, 0, 0))
+    recent7_nps = _nps_from_counts(r7p, r7d, r7t)
+    today_nps = _nps_from_counts(tdp, tdd, tdt)
+    detractors = int(store_row.get("detractors", 0) or 0)
+    passives = int(store_row.get("passives", 0) or 0)
+    promoters = int(store_row.get("promoters", 0) or 0)
+    total = int(store_row.get("total_responses", 0) or 0)
+    req = int(store_row.get("required_promoters_to_target", 0) or 0)
+    non_sales_nps = store_row.get("non_sales_nps_recalc")
+    non_sales_nps = float(non_sales_nps) if pd.notna(non_sales_nps) else None
+    sales_nps = store_row.get("sales_nps_recalc")
+    sales_nps = float(sales_nps) if pd.notna(sales_nps) else None
+
+    # ③ evidence — business type scope is type-specific
+    if dtype == "즉시 개선형" and not neg.empty and "response_type" in neg.columns:
+        scope = neg[neg["response_type"].astype(str).str.strip().eq("비추천")]
+    else:
+        scope = neg
+    top_business_types = _card_business_top(scope)
+    top_biz = top_business_types[0][0] if top_business_types else "비판매성 업무"
+
+    # representative VOC — drop 무의미/내용없음, lowest recommend_score first
+    rep_vocs: list[dict] = []
+    top_voc = "VOC 사유"
+    coaching_hint = "중립/비추천 발생 업무유형과 응대 프로세스 확인"
+    if not neg.empty and "reason_text" in neg.columns:
+        meaningful = neg.copy()
+        if "voc_category" in meaningful.columns:
+            meaningful = meaningful[meaningful["voc_category"].astype(str).ne("무의미/내용없음")]
+        txt = meaningful["reason_text"].astype(str).str.strip()
+        meaningful = meaningful[txt.ne("") & ~txt.str.contains(NO_ISSUE_RE)]
+        if not meaningful.empty:
+            # Surface real detractors first, then the lowest recommend_score.
+            is_det = meaningful.get("response_type", pd.Series(index=meaningful.index, dtype=object)).astype(str).str.strip().eq("비추천")
+            meaningful = meaningful.assign(
+                _isdet=is_det.astype(int),
+                _score=pd.to_numeric(meaningful.get("recommend_score"), errors="coerce"),
+            )
+            meaningful = meaningful.sort_values(["_isdet", "_score"], ascending=[False, True], na_position="last")
+            top_voc = _safe_text(meaningful.iloc[0].get("voc_category"), top_voc)
+            coaching_hint = _safe_text(meaningful.iloc[0].get("coaching_hint"), coaching_hint)
+            for _, rr in meaningful.head(2).iterrows():
+                rep_vocs.append({
+                    "text": _safe_text(rr.get("reason_text")),
+                    "business_type": _safe_text(rr.get("business_type"), "업무"),
+                    "voc_category": _safe_text(rr.get("voc_category"), "기타"),
+                })
+
+    actions, quant_goal, verify_metric = _card_actions(dtype, {
+        "top_biz": top_biz, "top_voc": top_voc, "detractors": detractors, "passives": passives,
+        "req": req, "rep_voc": rep_vocs[0]["text"] if rep_vocs else "", "coaching_hint": coaching_hint,
+        "risk_count": passives + detractors, "non_sales_nps": non_sales_nps, "target": target_score,
+    })
+
+    return {
+        "store_name": _safe_text(store_row.get("store_name"), "매장"),
+        "agency_name": _safe_text(store_row.get("agency_name"), "대리점"),
+        "marketer": _safe_text(store_row.get("marketer"), "-"),
+        "store_code": code,
+        "diagnosis_type": dtype,
+        "care_priority": float(store_row.get("priority_score", 0) or 0),
+        "sample_confidence": float(store_row.get("sample_confidence", 1) or 1),
+        "month_nps": month_nps,
+        "recent7_nps": recent7_nps, "recent7_n": int(r7t),
+        "today_nps": today_nps, "today_n": int(tdt),
+        "trend_arrow": _trend_arrow(month_nps, recent7_nps, today_nps),
+        "target_gap": (month_nps - target_score) if month_nps is not None else None,
+        "promoters": promoters, "passives": passives, "detractors": detractors, "total": total,
+        "sales_nps": sales_nps, "non_sales_nps": non_sales_nps,
+        "top_business_types": top_business_types,
+        "representative_vocs": rep_vocs,
+        "actions": actions, "quant_goal": quant_goal, "verify_metric": verify_metric,
+    }

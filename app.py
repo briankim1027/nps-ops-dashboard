@@ -21,6 +21,7 @@ except ModuleNotFoundError as e:  # Allows py_compile in minimal environments.
 
 from nps_ops.config import DEFAULT_TARGET_SCORE, DEFAULT_TEAM, PROCESSED_DIR
 from nps_ops.insights import (
+    ACTION_CARD_TYPES,
     add_voc_classification,
     build_daily_nps_trend,
     build_non_sales_business_type_top,
@@ -29,8 +30,10 @@ from nps_ops.insights import (
     build_nps_time_intelligence,
     build_sample_warning,
     build_sales_good_non_sales_weak,
+    build_store_action_card,
     build_store_action_sheet,
     build_store_daily_heatmap,
+    build_store_daily_lookup,
     build_store_non_sales_trend,
     build_weekday_time_hotspots,
 )
@@ -99,6 +102,24 @@ div[data-testid="stMetric"] {background:white; border:1px solid var(--skt-line);
 .skt-priority-note .skt-formula {display:inline-block; margin:0 0 6px 0;}
 @media (max-width:1100px) {.skt-help-grid {grid-template-columns:repeat(2,minmax(0,1fr));}}
 @media (max-width:720px) {.skt-help-grid {grid-template-columns:1fr;}}
+.skt-ac-card {background:#FFFFFF; border:1px solid var(--skt-line); border-radius:18px; padding:16px 16px 14px 16px; box-shadow:0 8px 22px rgba(13,14,26,.06); margin-bottom:14px;}
+.skt-ac-head {display:flex; justify-content:space-between; align-items:flex-start; gap:8px; margin-bottom:10px;}
+.skt-ac-name {font-size:16px; font-weight:900; letter-spacing:-.02em; color:#1A1A1A; line-height:1.25;}
+.skt-ac-sub {font-size:11.5px; color:var(--skt-muted); margin-top:2px;}
+.skt-ac-badge {flex:0 0 auto; font-size:10.5px; font-weight:800; border-radius:999px; padding:4px 10px; color:white; white-space:nowrap;}
+.skt-ac-rank {font-size:10.5px; font-weight:800; color:#4F46A5; margin-top:5px;}
+.skt-ac-kpis {display:flex; gap:8px; margin:8px 0 4px 0;}
+.skt-ac-kpi {flex:1; background:var(--skt-soft); border-radius:12px; padding:7px 4px; text-align:center;}
+.skt-ac-kpi .k {font-size:10px; font-weight:800; color:var(--skt-muted);}
+.skt-ac-kpi .v {font-size:18px; font-weight:900; color:#1A1A1A; letter-spacing:-.03em;}
+.skt-ac-kpi .n {font-size:9.5px; color:#9A9AAE; font-weight:700;}
+.skt-ac-meta {font-size:11.5px; color:#444455; margin:6px 0 2px 0; line-height:1.6;}
+.skt-ac-meta b {color:#1A1A1A;}
+.skt-ac-zone {font-size:10.5px; font-weight:800; color:#8A8A9C; letter-spacing:.04em; margin:11px 0 4px 0; text-transform:uppercase;}
+.skt-ac-voc {background:#F8F7FF; border-left:3px solid var(--skt-purple); padding:6px 10px; border-radius:8px; font-size:12px; color:#2A2A3A; margin:4px 0; line-height:1.45;}
+.skt-ac-action {font-size:12.5px; color:#26263A; margin:4px 0; line-height:1.5;}
+.skt-ac-goal {background:#FFF6EE; border-radius:9px; padding:6px 10px; font-size:12px; font-weight:800; color:#9A3F12; margin-top:7px;}
+.skt-ac-verify {font-size:11.5px; color:#249A45; font-weight:700; margin-top:5px;}
 </style>
 """
 st.markdown(SKT_CSS, unsafe_allow_html=True)
@@ -108,6 +129,58 @@ def fmt_score(v: float | int | None) -> str:
     if v is None or pd.isna(v):
         return "-"
     return f"{float(v):.1f}"
+
+
+ACTION_CARD_BADGE = {"즉시 개선형": "#DC6339", "비판매성 취약형": "#815CF6", "구조 개선형": "#C045F6"}
+
+
+def _ac_nps(v: float | None, n: int | None = None) -> str:
+    s = "-" if v is None or pd.isna(v) else f"{float(v):.0f}"
+    return f"{s}<div class='n'>n{n}</div>" if n is not None else s
+
+
+def render_action_card(card: dict, rank: int | None = None) -> str:
+    badge = ACTION_CARD_BADGE.get(card["diagnosis_type"], "#6B7280")
+    gap = card["target_gap"]
+    gap_s = "-" if gap is None or pd.isna(gap) else f"{gap:+.1f}p"
+    rank_html = f"<div class='skt-ac-rank'>Care Priority #{rank} · 신뢰도 ×{card['sample_confidence']:.2f}</div>" if rank else ""
+    biz = " · ".join(f"{b} {c}" for b, c in card["top_business_types"]) or "분류 가능한 비추천 업무 없음"
+    if card["representative_vocs"]:
+        vocs = "".join(
+            f"<div class='skt-ac-voc'>💬 {v['text'][:60]}<span style='color:#9A9AAE'> · {v['business_type']}</span></div>"
+            for v in card["representative_vocs"]
+        )
+    else:
+        vocs = "<div class='skt-ac-sub'>분류 가능한 대표 VOC 없음</div>"
+    actions = "".join(f"<div class='skt-ac-action'>☐ {a}</div>" for a in card["actions"])
+    sales_s = "-" if card["sales_nps"] is None else f"{card['sales_nps']:.0f}"
+    ns_s = "-" if card["non_sales_nps"] is None else f"{card['non_sales_nps']:.0f}"
+    return f"""
+<div class="skt-ac-card">
+  <div class="skt-ac-head">
+    <div>
+      <div class="skt-ac-name">{card['store_name']} {card['trend_arrow']}</div>
+      <div class="skt-ac-sub">{card['agency_name']} · 담당 {card['marketer']}</div>
+      {rank_html}
+    </div>
+    <div class="skt-ac-badge" style="background:{badge}">{card['diagnosis_type']}</div>
+  </div>
+  <div class="skt-ac-kpis">
+    <div class="skt-ac-kpi"><div class="k">월누적</div><div class="v">{_ac_nps(card['month_nps'])}</div></div>
+    <div class="skt-ac-kpi"><div class="k">최근7일</div><div class="v">{_ac_nps(card['recent7_nps'], card['recent7_n'])}</div></div>
+    <div class="skt-ac-kpi"><div class="k">오늘</div><div class="v">{_ac_nps(card['today_nps'], card['today_n'])}</div></div>
+  </div>
+  <div class="skt-ac-meta">목표Gap <b>{gap_s}</b> · 판매성 <b>{sales_s}</b> / 비판매성 <b>{ns_s}</b><br>
+  응답 <b>{card['total']}</b> · 추천 {card['promoters']} · 중립 {card['passives']} · 비추천 {card['detractors']}</div>
+  <div class="skt-ac-zone">왜 문제</div>
+  <div class="skt-ac-meta">비추천 업무 Top: {biz}</div>
+  {vocs}
+  <div class="skt-ac-zone">이번 주 액션</div>
+  {actions}
+  <div class="skt-ac-goal">🎯 {card['quant_goal']}</div>
+  <div class="skt-ac-verify">✔ 다음 점검: {card['verify_metric']}</div>
+</div>
+"""
 
 
 def axis_summary(df: pd.DataFrame, prefix: str = "") -> dict[str, float | int | None]:
@@ -204,6 +277,7 @@ action_sheet = pd.read_parquet(action_sheet_files[0]) if action_sheet_files else
     negative[negative["team_name"].astype(str).str.strip().eq(team)] if not negative.empty and "team_name" in negative.columns else negative,
     target_score,
 )
+store_daily_lookup = build_store_daily_lookup(response, team) if not response.empty else {}
 report_date = priority["report_date"].dropna().astype(str).iloc[0][:10] if "report_date" in priority.columns and priority["report_date"].notna().any() else priority_files[0].stem[-8:]
 
 agency_options = sorted([str(x) for x in priority.get("agency_name", pd.Series(dtype=object)).dropna().unique()])
@@ -513,13 +587,6 @@ def emphasis_store_label(store_name: object, emphasis_stores: set[str]) -> str:
     store_text = str(store_name)
     return f"<b><i>{store_text}</i></b>" if store_text in emphasis_stores else store_text
 
-priority_formula_html = f"""
-<div class="skt-priority-note">
-  <div class="skt-formula">Care Priority = Base Risk Score × Sample Confidence</div>
-  <div>Base Risk Score는 비추천·중립 절대량, 목표 87점까지 필요추천수, 응답 충분성을 함께 봅니다. Sample Confidence는 응답 수가 작은 매장의 점수를 할인해(20+:×1.0 / 10~19:×0.85 / 5~9:×0.70) 소표본 착시를 줄입니다. 점수가 높을수록 먼저 확인해야 할 매장입니다.</div>
-</div>
-"""
-
 risk_score_formula_html = f"""
 <div class="skt-priority-note">
   <div class="skt-formula">Care Priority = Base Risk Score × Sample Confidence · 비판매성 응답 수가 작을수록 점수 할인</div>
@@ -778,36 +845,43 @@ else:
         fig.update_layout(height=520, plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", margin=dict(l=10, r=10, t=20, b=10))
         st.plotly_chart(fig, use_container_width=True)
 
-st.markdown('<div class="skt-section-title">매장 개입 우선순위</div>', unsafe_allow_html=True)
-st.markdown('<div class="skt-section-caption">기본 판세는 종합 NPS로 보고, 우측 탭에서 판매성/비판매성 축으로 같은 매장을 재정렬합니다.</div>', unsafe_allow_html=True)
+st.markdown('<div class="skt-section-title">유형별 대응방안</div>', unsafe_allow_html=True)
+st.markdown('<div class="skt-section-caption">Care가 필요한 3개 유형을 탭으로 나누고, 대리점별로 매장 Action Card를 제공합니다. 카드는 상태(월누적·최근7일·오늘 NPS)→근거(비추천 업무·대표 VOC)→이번 주 액션 순으로 읽도록 구성했습니다. 정렬은 Care Priority 순입니다.</div>', unsafe_allow_html=True)
 
-tabs = st.tabs(["종합 NPS", "판매성 NPS", "비판매성 NPS"])
-for tab, axis in zip(tabs, ["종합 NPS", "판매성 NPS", "비판매성 NPS"]):
+# Global Care Priority rank for card headers.
+_rank_src = priority_view_base.copy()
+_rank_src["_ps"] = pd.to_numeric(_rank_src.get("priority_score", 0), errors="coerce").fillna(0)
+_rank_src = _rank_src.sort_values("_ps", ascending=False).reset_index(drop=True)
+care_rank_map = {str(r["store_code"]).strip(): i + 1 for i, r in _rank_src.iterrows()}
+
+# Team-scoped negative ledger for VOC evidence.
+card_negative = negative.copy()
+if not card_negative.empty and "team_name" in card_negative.columns:
+    card_negative = card_negative[card_negative["team_name"].astype(str).str.strip().eq(team)]
+if not card_negative.empty and "store_code" in card_negative.columns:
+    card_negative["store_code"] = card_negative["store_code"].astype(str).str.strip()
+
+action_tabs = st.tabs(ACTION_CARD_TYPES)
+for tab, dtype in zip(action_tabs, ACTION_CARD_TYPES):
     with tab:
-        axis_df = prepare_axis_table(priority_view_base, axis, target_score)
-        show_cols = [
-            "agency_name", "store_name", "선택축_총응답자", "선택축_추천", "선택축_중립", "선택축_비추천",
-            "선택축_NPS", "선택축_목표Gap", "선택축_필요추천수", "선택축_샘플", "diagnosis_type", "선택축_priority_score",
-        ]
-        view = axis_df[[c for c in show_cols if c in axis_df.columns]].copy()
-        rename = {
-            "agency_name": "대리점", "store_name": "매장", "선택축_총응답자": "총응답자", "선택축_추천": "추천",
-            "선택축_중립": "중립", "선택축_비추천": "비추천", "선택축_NPS": "NPS", "선택축_목표Gap": "목표Gap",
-            "선택축_필요추천수": "필요추천수", "선택축_샘플": "샘플", "diagnosis_type": "종합진단", "선택축_priority_score": "Care Priority",
-        }
-        view = view.rename(columns=rename)
-        st.dataframe(
-            view,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "NPS": st.column_config.NumberColumn("NPS", format="%.1f"),
-                "목표Gap": st.column_config.NumberColumn("목표Gap", format="%.1f"),
-                "Care Priority": st.column_config.NumberColumn("Care Priority", format="%.1f"),
-            },
-        )
-
-st.markdown(priority_formula_html, unsafe_allow_html=True)
+        subset = priority_view_base[priority_view_base.get("diagnosis_type", "").astype(str).eq(dtype)].copy()
+        subset["_ps"] = pd.to_numeric(subset.get("priority_score", 0), errors="coerce").fillna(0)
+        subset = subset.sort_values("_ps", ascending=False)
+        if subset.empty:
+            st.info(f"현재 기준 '{dtype}' 매장이 없습니다.")
+            continue
+        # Order agencies by their most urgent store, then keep store order within.
+        agency_order = subset.groupby("agency_name")["_ps"].max().sort_values(ascending=False).index.tolist()
+        for a_idx, agency in enumerate(agency_order):
+            stores = subset[subset["agency_name"].eq(agency)]
+            with st.expander(f"{agency} · {len(stores)}곳", expanded=(a_idx == 0)):
+                cols = st.columns(2)
+                for s_idx, (_, store_row) in enumerate(stores.iterrows()):
+                    code = str(store_row.get("store_code", "")).strip()
+                    store_neg = card_negative[card_negative["store_code"].eq(code)] if not card_negative.empty and "store_code" in card_negative.columns else pd.DataFrame()
+                    card = build_store_action_card(store_row, store_neg, store_daily_lookup, target_score)
+                    with cols[s_idx % 2]:
+                        st.markdown(render_action_card(card, rank=care_rank_map.get(code)), unsafe_allow_html=True)
 
 st.markdown('<div class="skt-section-title">비판매성 NPS 전용 상세</div>', unsafe_allow_html=True)
 st.markdown('<div class="skt-section-caption">비판매성 업무유형 Top, 매장별 추이, 판매성은 양호하지만 비판매성만 낮은 매장을 별도로 봅니다.</div>', unsafe_allow_html=True)

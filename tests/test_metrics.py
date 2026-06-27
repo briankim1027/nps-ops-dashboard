@@ -17,7 +17,9 @@ from nps_ops.insights import (
     build_nps_source_recalc_diff,
     build_nps_time_intelligence,
     build_sample_warning,
+    build_store_action_card,
     build_store_daily_heatmap,
+    build_store_daily_lookup,
     build_weekday_time_hotspots,
 )
 from nps_ops.metrics import build_store_priority, diagnose_store, normalize_nps_series
@@ -260,6 +262,66 @@ class MetricsScaleTest(unittest.TestCase):
         hotspots = build_weekday_time_hotspots(fact, team="전북", axis="비판매성")
         self.assertEqual(hotspots.iloc[0]["time_bucket"], "시간정보 없음")
         self.assertFalse(bool(hotspots.iloc[0]["has_time_detail"]))
+
+
+class StoreActionCardTest(unittest.TestCase):
+    def _store_row(self, **over) -> pd.Series:
+        base = {
+            "store_code": "S1", "store_name": "테스트점", "agency_name": "테스트대리점", "marketer": "홍길동",
+            "diagnosis_type": "즉시 개선형", "priority_score": 50.0, "sample_confidence": 0.85,
+            "nps_recalc": 70.0, "non_sales_nps_recalc": 60.0, "sales_nps_recalc": 90.0,
+            "promoters": 18, "passives": 3, "detractors": 3, "total_responses": 24,
+            "required_promoters_to_target": 4,
+        }
+        base.update(over)
+        return pd.Series(base)
+
+    def _negative(self) -> pd.DataFrame:
+        return pd.DataFrame([
+            {"store_code": "S1", "response_type": "비추천", "business_type": "요금수납", "recommend_score": 2.0,
+             "reason_text": "수납하러 갔는데 대기가 너무 길었다", "voc_category": "대기/처리시간", "coaching_hint": "대기 안내"},
+            {"store_code": "S1", "response_type": "비추천", "business_type": "요금수납", "recommend_score": 5.0,
+             "reason_text": "없음", "voc_category": "무의미/내용없음", "coaching_hint": "반복 여부 확인"},
+            {"store_code": "S1", "response_type": "중립", "business_type": "명의변경", "recommend_score": 8.0,
+             "reason_text": "처리는 됐는데 설명이 부족", "voc_category": "요금/제도 설명부족", "coaching_hint": "재설명"},
+            {"store_code": "S1", "response_type": "중립", "business_type": "기기변경", "recommend_score": 7.0,
+             "reason_text": "불편하지 않았습니다", "voc_category": "업무처리 미흡", "coaching_hint": "확인"},
+        ])
+
+    def test_daily_lookup_today_and_recent7_windows(self) -> None:
+        fact = pd.DataFrame([
+            {"team_name": "전북", "store_code": "S1", "process_date": "2026-06-24", "promoter_flag": 1, "passive_flag": 0, "detractor_flag": 0},
+            {"team_name": "전북", "store_code": "S1", "process_date": "2026-06-20", "promoter_flag": 0, "passive_flag": 0, "detractor_flag": 1},
+            {"team_name": "전북", "store_code": "S1", "process_date": "2026-06-10", "promoter_flag": 1, "passive_flag": 0, "detractor_flag": 0},
+        ])
+        lookup = build_store_daily_lookup(fact, team="전북")
+        self.assertEqual(lookup["S1"]["today"], (1, 0, 1))  # only 06-24
+        self.assertEqual(lookup["S1"]["recent7"], (1, 1, 2))  # 06-18..06-24 (excludes 06-10)
+
+    def test_action_card_immediate_type_uses_detractor_scope_and_filters_voc(self) -> None:
+        card = build_store_action_card(self._store_row(), self._negative(), {"S1": {"today": (0, 1, 1), "recent7": (1, 1, 3)}}, target_score=87.0)
+        # 즉시 개선형 → business top scope is 비추천 only → 요금수납 appears, 명의변경(중립) excluded.
+        self.assertEqual(card["top_business_types"][0][0], "요금수납")
+        self.assertTrue(all(bt[0] != "명의변경" for bt in card["top_business_types"]))
+        # representative VOC drops 무의미/내용없음 and ranks by lowest recommend_score.
+        self.assertEqual(card["representative_vocs"][0]["text"], "수납하러 갔는데 대기가 너무 길었다")
+        self.assertTrue(all(v["voc_category"] != "무의미/내용없음" for v in card["representative_vocs"]))
+        # No-issue passive comment ("불편하지 않았습니다") must never surface as evidence.
+        self.assertTrue(all("불편하지 않았" not in v["text"] for v in card["representative_vocs"]))
+        self.assertTrue(any("전수 확인" in a for a in card["actions"]))
+        self.assertEqual(card["trend_arrow"], "▼")  # today nps 0 < month 70
+
+    def test_action_card_non_sales_type_includes_passives_in_scope(self) -> None:
+        card = build_store_action_card(self._store_row(diagnosis_type="비판매성 취약형"), self._negative(), {}, target_score=87.0)
+        types = [bt[0] for bt in card["top_business_types"]]
+        self.assertIn("명의변경", types)  # 중립 included for non-sales type
+        self.assertTrue(any("추천 전환" in a for a in card["actions"]))
+
+    def test_action_card_handles_no_negative_rows(self) -> None:
+        card = build_store_action_card(self._store_row(), pd.DataFrame(), {}, target_score=87.0)
+        self.assertEqual(card["top_business_types"], [])
+        self.assertEqual(card["representative_vocs"], [])
+        self.assertEqual(card["today_nps"], None)
 
 
 if __name__ == "__main__":

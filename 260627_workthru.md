@@ -117,3 +117,77 @@ cd /home/brian/workplace/nps-ops-dashboard
 .venv/bin/python -m streamlit run app.py --server.headless true --server.port 8502
 .venv/bin/python -m pytest -q
 ```
+
+---
+
+# 260627 (오후 추가) — 단일 매장 Action Card 구현
+
+## 결론
+
+`reports/02_risk_scorecard_redesign.md`의 "우선순위 1: 단일 매장 Action Card"를 실제 구현했다.
+기존 `매장 개입 우선순위` 섹션(종합/판매성/비판매성 축 재정렬 table)은 Risk Map·Top20 bar와 기능이
+겹쳐 유효성이 떨어져 **삭제**하고, 그 자리에 **`유형별 대응방안`** 섹션을 신설했다.
+
+핵심 구조: **유형 탭 3개 → 대리점 expander → 2열 매장 Action Card.**
+
+## 1. 설계 결정 (Brian과 논의 확정)
+
+- **카드 제공 대상 = Care 3유형** (우선순위 = 심각도가 아니라 *행동 시급성·실행 가능성* 순):
+  1. 즉시 개선형 (비추천≥2, 이미 터진 손상 복구)
+  2. 비판매성 취약형 (비판매<목표·판매 OK, 코칭 전환)
+  3. 구조 개선형 (양축 동시 미달, 대리점 단위 에스컬레이션)
+- 회복 가능형(Quick Win)은 이번 scope에서 제외, 액션 문구는 **rule-based 유지**(재현성·검증성).
+- UX는 (C) 카테고리 탭 + 대리점 expander 선택 → 스크롤 압박 최소화. default 탭 = 즉시 개선형.
+- 정렬 = Care Priority 순(대리점 = 소속 최고 매장 점수 기준, 매장 = 점수순). 빈 탭 가드.
+- redundant했던 `priority_formula_html`은 삭제(Top20 bar 아래 `risk_score_formula_html`이 이미 동일 설명).
+
+## 2. 카드 4-zone 템플릿
+
+운영자 질문 흐름(누구를 / 지금 상태 / 왜 문제 / 뭘 할지 / 다음 확인)을 4 zone으로:
+
+- **① 식별** — 매장명·대리점·담당 marketer, 유형 badge, Care Priority #N, Sample Confidence
+- **② 상태** — 월누적/최근7일/오늘 NPS(+▲▼ 추세 화살표), 목표Gap, 판매성/비판매성 NPS, 추천/중립/비추천
+- **③ 근거** — 비추천 업무유형 Top, 대표 VOC 실인용
+- **④ 액션** — 유형별 체크리스트 + 🎯정량 목표(필요추천수) + ✔다음 점검 지표
+
+"손에 잡히게" 원칙: 대표 VOC 실인용 · 정량 목표 명시 · 체크리스트형 · 유형별 차별화 · 다음 확인 지표.
+
+## 3. 유형별 분기 (③근거·④액션)
+
+| | 즉시 개선형 | 비판매성 취약형 | 구조 개선형 |
+|---|---|---|---|
+| ③ biz Top 집계 | **비추천만** | 중립+비추천 | 중립+비추천 |
+| ④ 액션 핵심 | 비추천 N건 전수 확인·클로징 | 중립 N건 추천 전환 | 대리점 합동 점검·2개월 로드맵 |
+| 🎯 목표 | 비추천 → 0 | 추천 N건 확보(중립 우선 전환) | 이달+다음달 분할 |
+
+## 4. 데이터 헬퍼 (`src/nps_ops/insights.py`)
+
+- `build_store_action_card(store_row, store_negative, daily_lookup, target_score)` → 단일 매장 4-zone dict.
+- `build_store_daily_lookup(response_fact, team)` → `{store_code: {today, recent7}}` (매장×날짜 1회 집계).
+- `_card_actions()` 유형별 rule-based 문구, `ACTION_CARD_TYPES`, `NO_ISSUE_RE` 상수.
+
+## 5. 실데이터 검증 중 발견한 품질 이슈 2건 (수정)
+
+1. **대표 VOC가 "불편한 점 없었습니다" 류 무이슈 중립 코멘트를 끌어옴**
+   (비추천 reason_text가 비어 중립 긍정 코멘트로 fallback).
+   → 대표 VOC = **비추천 우선 + 무이슈 패턴 제외**(`NO_ISSUE_RE`). 부정 대상 단어(불편/문제/이상)를
+   함께 봐서 "친절하지 않았어요"(=불친절) 같은 **진짜 불만은 보존**. 없으면 "대표 VOC 없음"으로 정직하게 degrade.
+2. **"중립 6건 중 16건 전환"(필요추천>중립) 모순 문구**
+   → "추천 N건 확보 — 중립 M건 우선 전환 대상"으로 정정.
+
+## 6. 검증 기록
+
+```bash
+.venv/bin/python -m py_compile app.py src/nps_ops/insights.py            # COMPILE_OK
+.venv/bin/python -m pytest -q                                            # 23 passed (19→23, Action Card 4건 추가)
+.venv/bin/python -c "from streamlit.testing.v1 import AppTest; ..."      # 예외 0건, 신규 탭 3개·expander 19개 렌더
+.venv/bin/python -m streamlit run app.py --server.headless --port 8502   # HTTP 200
+# 실데이터 6/24: 29개 카드 생성 (즉시 14·비판매 13·구조 2)
+```
+
+## 7. 다음 후보
+
+- 카드 밀도/2열 균형 등 시각 다듬기(브라우저 확인 피드백 반영)
+- 회복 가능형 Quick Win 카드(보류) 재검토
+- VOC 축 정밀 분리(response_fact NCSI 조인)로 비판매성 취약형 카드 biz Top 정확도 향상
+- 카드 → CSV/PDF 현장 배포 export
