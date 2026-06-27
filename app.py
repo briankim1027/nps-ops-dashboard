@@ -34,7 +34,7 @@ from nps_ops.insights import (
     build_store_non_sales_trend,
     build_weekday_time_hotspots,
 )
-from nps_ops.metrics import required_promoters_to_target, sample_grade
+from nps_ops.metrics import required_promoters_to_target, sample_confidence, sample_grade
 
 
 st.set_page_config(page_title="전북팀 NPS 운영 Dashboard", layout="wide", page_icon="📡")
@@ -89,10 +89,10 @@ div[data-testid="stMetric"] {background:white; border:1px solid var(--skt-line);
 [data-testid="stDataFrame"] {border-radius:18px; overflow:hidden; border:1px solid var(--skt-line); box-shadow:0 8px 24px rgba(13,14,26,.05);}
 .skt-help-box {background:#FFFFFF; border:1px solid var(--skt-line); border-radius:20px; padding:16px 18px; box-shadow:0 8px 24px rgba(13,14,26,.06); margin:8px 0 16px 0;}
 .skt-help-title {font-size:16px; font-weight:900; margin:0 0 10px 0; color:#1A1A1A;}
-.skt-help-grid {display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px 16px;}
+.skt-help-grid {display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px 16px;}
 .skt-help-item {display:flex; align-items:flex-start; gap:10px; margin-top:10px; font-size:13px; line-height:1.55; color:#333344;}
 .skt-help-text {flex:1; padding-top:2px;}
-.skt-chip {display:inline-block; flex:0 0 128px; min-width:128px; text-align:center; border-radius:999px; padding:4px 10px; margin-right:0; font-size:12px; font-weight:900; color:white; background:#815CF6;}
+.skt-chip {display:inline-block; flex:0 0 128px; min-width:128px; white-space:nowrap; text-align:center; border-radius:999px; padding:4px 10px; margin-right:0; font-size:12px; font-weight:900; color:white; background:#815CF6;}
 .skt-chip.orange {background:#DC6339;}.skt-chip.yellow {background:#E0CD4E; color:#1A1A1A;}.skt-chip.green {background:#249A45;}.skt-chip.gray {background:#6B7280;}.skt-chip.magenta {background:#C045F6;}
 .skt-formula {font-family:'JetBrains Mono','Courier New',monospace; background:#F5F3FF; border-radius:12px; padding:10px 12px; font-size:13px; color:#231653; margin-top:8px;}
 .skt-priority-note {font-size:12.5px; color:#4B4B5F; margin:8px 0 18px 0; line-height:1.55;}
@@ -147,13 +147,16 @@ def prepare_axis_table(priority: pd.DataFrame, axis: str, target_score: float) -
     df["선택축_필요추천수"] = df.apply(lambda r: required_promoters_to_target(r["선택축_추천"], r["선택축_중립"], r["선택축_비추천"], target_score), axis=1)
     df["선택축_샘플"] = df["선택축_총응답자"].apply(sample_grade)
     df["선택축_Risk"] = df["선택축_중립"] + df["선택축_비추천"]
-    df["선택축_priority_score"] = (
+    # Care Priority = Base Risk Score × Sample Confidence (keyed on the selected axis' response count).
+    df["선택축_base_priority_score"] = (
         df["선택축_비추천"] * 10
         + df["선택축_중립"] * 3
         + df["선택축_필요추천수"] * 2
         + (df["선택축_총응답자"].clip(upper=30) / 10)
         + (-df["선택축_목표Gap"].clip(upper=0) / 10)
     )
+    df["선택축_sample_confidence"] = df["선택축_총응답자"].apply(sample_confidence)
+    df["선택축_priority_score"] = df["선택축_base_priority_score"] * df["선택축_sample_confidence"]
     sort_cols = ["선택축_priority_score", "선택축_비추천", "선택축_총응답자"]
     return df.sort_values(sort_cols, ascending=[False, False, False])
 
@@ -512,15 +515,15 @@ def emphasis_store_label(store_name: object, emphasis_stores: set[str]) -> str:
 
 priority_formula_html = f"""
 <div class="skt-priority-note">
-  <div class="skt-formula">우선순위점수 = 비추천×10 + 중립×3 + 목표까지 필요추천수×2 + min(총응답자,30)/10 + 목표미달Gap절대값/10</div>
-  <div>해석: 비추천과 중립의 절대량을 가장 크게 보고, 목표 87점까지 회복에 필요한 추천수와 샘플 충분성을 함께 반영합니다. 점수가 높을수록 먼저 확인해야 할 매장입니다.</div>
+  <div class="skt-formula">Care Priority = Base Risk Score × Sample Confidence</div>
+  <div>Base Risk Score는 비추천·중립 절대량, 목표 87점까지 필요추천수, 응답 충분성을 함께 봅니다. Sample Confidence는 응답 수가 작은 매장의 점수를 할인해(20+:×1.0 / 10~19:×0.85 / 5~9:×0.70) 소표본 착시를 줄입니다. 점수가 높을수록 먼저 확인해야 할 매장입니다.</div>
 </div>
 """
 
 risk_score_formula_html = f"""
 <div class="skt-priority-note">
-  <div class="skt-formula">Care Priority = 비추천×10 + 중립×3 + 목표까지 필요추천수×2 + min(비판매성 응답,30)/10 + 목표미달Gap절대값/10</div>
-  <div>Risk Map/Top 20은 비판매성 축 기준입니다. 관찰/유지형·샘플착시형은 범례에서 제외해 실제 케어 후보와 우수 확산 후보만 먼저 보이도록 했습니다.</div>
+  <div class="skt-formula">Care Priority = Base Risk Score × Sample Confidence · 비판매성 응답 수가 작을수록 점수 할인</div>
+  <div>Base Risk Score: 비판매성 NPS gap · 비추천/중립 · 비판매성 응답 volume 기반. Sample Confidence: 비판매성 응답 20+:×1.0 / 10~19:×0.85 / 5~9:×0.70, 5건 미만 샘플착시형은 범례에서 제외합니다. Risk Map/Top 20은 비판매성 축 기준으로 실제 케어 후보와 우수 확산 후보만 먼저 보이도록 했습니다.</div>
 </div>
 """
 
@@ -532,6 +535,7 @@ risk_map = priority_view_base.copy()
 for c in ["non_sales_total_responses", "total_responses", "non_sales_nps_recalc", "priority_score"]:
     risk_map[c] = pd.to_numeric(risk_map.get(c, 0), errors="coerce").fillna(0)
 risk_map = risk_map[(risk_map["total_responses"] > 0) & ~risk_map.get("diagnosis_type", "").astype(str).isin(risk_excluded_types)].copy()
+risk_map["sample_confidence"] = risk_map["non_sales_total_responses"].apply(sample_confidence)
 risk_type_counts = risk_map["diagnosis_type"].value_counts().reindex(RISK_MAP_TYPE_ORDER).fillna(0).astype(int)
 risk_label_map = risk_type_label_map(risk_type_counts)
 risk_label_color_map = risk_type_color_map(risk_label_map)
@@ -584,6 +588,7 @@ else:
             "비판매성 응답비중",
             "diagnosis_type",
             "overlap_count",
+            "sample_confidence",
         ],
         color_discrete_map=risk_label_color_map,
         category_orders={"diagnosis_label": risk_label_order},
@@ -600,6 +605,7 @@ else:
             "전체 응답건수(Bubble)=%{customdata[1]:,}<br>"
             "비추천=%{customdata[4]:,} · 중립=%{customdata[5]:,}<br>"
             "Care Priority=%{customdata[6]:.1f}<br>"
+            "Sample Confidence=×%{customdata[10]:.2f}<br>"
             "비판매성 응답비중=%{customdata[7]:.1%}<extra></extra>"
         )
     )
@@ -647,16 +653,24 @@ else:
 
 st.markdown(build_risk_map_legend_html(risk_type_counts), unsafe_allow_html=True)
 
-hot_spot_store_rank = pd.DataFrame(columns=["store_name", "total_responses", "risk_count"])
+hot_spot_store_rank = pd.DataFrame(columns=["store_name", "total_responses", "risk_count", "risk_days"])
 if not store_daily_heatmap_view_base.empty:
     _hm_rank = store_daily_heatmap_view_base.copy()
     _hm_rank["trend_date"] = pd.to_datetime(_hm_rank["trend_date"], errors="coerce")
     _hm_rank = _hm_rank[_hm_rank["trend_date"].notna()].copy()
+    _hm_rank["risk_count"] = pd.to_numeric(_hm_rank["risk_count"], errors="coerce").fillna(0)
+    # risk_days = risk가 발생한 '서로 다른 날'의 수 → 단발 착시가 아닌 반복 흔들림 신호
+    _risk_days = _hm_rank[_hm_rank["risk_count"] > 0].groupby("store_name")["trend_date"].nunique()
     hot_spot_store_rank = _hm_rank.groupby("store_name", dropna=False).agg(
         total_responses=("total_responses", "sum"),
         risk_count=("risk_count", "sum"),
     ).reset_index()
-    hot_spot_store_rank = hot_spot_store_rank.sort_values(["risk_count", "total_responses"], ascending=False).head(25)
+    hot_spot_store_rank["risk_days"] = hot_spot_store_rank["store_name"].map(_risk_days).fillna(0).astype(int)
+    # 반복 발생 매장만(2일 이상), 발생일 수 → risk건수 → 응답 순으로 강조
+    hot_spot_store_rank = hot_spot_store_rank[hot_spot_store_rank["risk_days"] >= 2]
+    hot_spot_store_rank = hot_spot_store_rank.sort_values(
+        ["risk_days", "risk_count", "total_responses"], ascending=False
+    ).head(25)
 hot_spot_store_set = set(hot_spot_store_rank["store_name"].astype(str))
 common_action_stores: set[str] = set()
 
@@ -680,10 +694,10 @@ else:
         orientation="h",
         color="diagnosis_label",
         text="선택축_priority_score",
-        hover_data={"agency_name": True, "diagnosis_type": True, "선택축_NPS": ":.1f", "선택축_총응답자": ":,", "선택축_비추천": ":,"},
+        hover_data={"agency_name": True, "diagnosis_type": True, "선택축_NPS": ":.1f", "선택축_총응답자": ":,", "선택축_비추천": ":,", "선택축_sample_confidence": ":.2f"},
         color_discrete_map=risk_label_color_map,
         category_orders={"diagnosis_label": risk_label_order},
-        labels={"선택축_priority_score": "Care Priority", "store_label": "매장", "diagnosis_label": "Care 등급"},
+        labels={"선택축_priority_score": "Care Priority", "store_label": "매장", "diagnosis_label": "Care 등급", "선택축_총응답자": "비판매성 응답", "선택축_sample_confidence": "Sample Confidence"},
     )
     fig.update_traces(texttemplate="%{text:.1f}", textposition="outside")
     fig.update_layout(
@@ -701,19 +715,26 @@ else:
 st.markdown(risk_score_formula_html, unsafe_allow_html=True)
 
 st.markdown('<div class="skt-section-title">NPS Hot Spot Mesh</div>', unsafe_allow_html=True)
-st.markdown('<div class="skt-section-caption">날짜×매장 heatmap과 요일×시간대 hotspot을 크게 나눠 봅니다.</div>', unsafe_allow_html=True)
-if store_daily_heatmap_view_base.empty:
-    st.info("날짜×매장 heatmap 데이터가 없습니다.")
+st.markdown('<div class="skt-section-caption">날짜×매장 heatmap은 월 중 risk(중립/비추천)가 <b>2일 이상 반복 발생</b>한 매장만 발생일 수 순으로 추립니다. 매장명 옆 (N일)은 risk 발생일 수, <b><i>굵은 기울임</i></b>은 Care Priority Top 20과도 겹치는 공통 action 매장입니다. 아래 요일 그래프는 비판매성 응답량과 risk율을 함께 봅니다.</div>', unsafe_allow_html=True)
+if store_daily_heatmap_view_base.empty or hot_spot_store_rank.empty:
+    st.info("반복(2일 이상) risk 발생 매장이 없습니다.")
 else:
+    store_rank = hot_spot_store_rank.copy()
+    risk_days_map = dict(zip(store_rank["store_name"].astype(str), store_rank["risk_days"].astype(int)))
+
+    def hot_spot_label(store: object) -> str:
+        name = str(store)
+        base = f"{name} ({risk_days_map.get(name, 0)}일)"
+        return f"<b><i>{base}</i></b>" if name in common_action_stores else base
+
     hm = store_daily_heatmap_view_base.copy()
     hm["trend_date"] = pd.to_datetime(hm["trend_date"], errors="coerce")
     hm = hm[hm["trend_date"].notna()].copy()
     hm["date_label"] = hm["trend_date"].dt.strftime("%m/%d")
-    store_rank = hot_spot_store_rank.copy()
     hm = hm[hm["store_name"].isin(store_rank["store_name"])]
-    hm["store_label"] = hm["store_name"].map(lambda store: emphasis_store_label(store, common_action_stores))
+    hm["store_label"] = hm["store_name"].map(hot_spot_label)
     date_order = hm.sort_values("trend_date")["date_label"].drop_duplicates().tolist()
-    store_order = [emphasis_store_label(store, common_action_stores) for store in store_rank["store_name"].astype(str).tolist()]
+    store_order = [hot_spot_label(store) for store in store_rank["store_name"].astype(str).tolist()]
     fig = px.density_heatmap(
         hm,
         x="date_label",
@@ -751,7 +772,9 @@ else:
     else:
         wd = wh.groupby(["weekday_idx", "weekday"], as_index=False).agg(total_responses=("total_responses", "sum"), risk_count=("risk_count", "sum"), hotspot_score=("hotspot_score", "sum"))
         wd = wd.sort_values("weekday_idx")
-        fig = px.bar(wd, x="weekday", y="total_responses", color="risk_count", color_continuous_scale=[[0, "#815CF6"], [1, "#DC6339"]], labels={"weekday": "요일", "total_responses": "비판매성 응답", "risk_count": "Risk건수"})
+        wd["risk_rate"] = (wd["risk_count"] / wd["total_responses"]).where(wd["total_responses"] > 0, 0.0)
+        fig = px.bar(wd, x="weekday", y="total_responses", color="risk_count", custom_data=["risk_count", "risk_rate"], color_continuous_scale=[[0, "#815CF6"], [1, "#DC6339"]], labels={"weekday": "요일", "total_responses": "비판매성 응답", "risk_count": "Risk건수"})
+        fig.update_traces(hovertemplate="요일=%{x}<br>비판매성 응답=%{y:,}<br>Risk건수=%{customdata[0]:,}<br>Risk율=%{customdata[1]:.1%}<extra></extra>")
         fig.update_layout(height=520, plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", margin=dict(l=10, r=10, t=20, b=10))
         st.plotly_chart(fig, use_container_width=True)
 
@@ -770,7 +793,7 @@ for tab, axis in zip(tabs, ["종합 NPS", "판매성 NPS", "비판매성 NPS"]):
         rename = {
             "agency_name": "대리점", "store_name": "매장", "선택축_총응답자": "총응답자", "선택축_추천": "추천",
             "선택축_중립": "중립", "선택축_비추천": "비추천", "선택축_NPS": "NPS", "선택축_목표Gap": "목표Gap",
-            "선택축_필요추천수": "필요추천수", "선택축_샘플": "샘플", "diagnosis_type": "종합진단", "선택축_priority_score": "우선순위점수",
+            "선택축_필요추천수": "필요추천수", "선택축_샘플": "샘플", "diagnosis_type": "종합진단", "선택축_priority_score": "Care Priority",
         }
         view = view.rename(columns=rename)
         st.dataframe(
@@ -780,7 +803,7 @@ for tab, axis in zip(tabs, ["종합 NPS", "판매성 NPS", "비판매성 NPS"]):
             column_config={
                 "NPS": st.column_config.NumberColumn("NPS", format="%.1f"),
                 "목표Gap": st.column_config.NumberColumn("목표Gap", format="%.1f"),
-                "우선순위점수": st.column_config.NumberColumn("우선순위점수", format="%.1f"),
+                "Care Priority": st.column_config.NumberColumn("Care Priority", format="%.1f"),
             },
         )
 
@@ -799,12 +822,12 @@ with ns_tab1:
             "agency_name": "대리점", "store_name": "매장", "axis_total_responses": "비판매성 응답", "axis_promoters": "추천",
             "axis_passives": "중립", "axis_detractors": "비추천", "axis_nps": "비판매성 NPS", "axis_target_gap": "목표Gap",
             "axis_required_promoters": "필요추천수", "axis_sample_grade": "샘플", "axis_risk_count": "Risk건수",
-            "focus_reason": "집중관리 사유", "axis_priority_score": "우선순위점수",
+            "focus_reason": "집중관리 사유", "axis_priority_score": "Care Priority",
         })
         st.dataframe(ns_view, use_container_width=True, hide_index=True, column_config={
             "비판매성 NPS": st.column_config.NumberColumn("비판매성 NPS", format="%.1f"),
             "목표Gap": st.column_config.NumberColumn("목표Gap", format="%.1f"),
-            "우선순위점수": st.column_config.NumberColumn("우선순위점수", format="%.1f"),
+            "Care Priority": st.column_config.NumberColumn("Care Priority", format="%.1f"),
         })
 with ns_tab2:
     if non_sales_business_type_top.empty:
@@ -879,14 +902,14 @@ with ns_tab4:
             "agency_name": "대리점", "store_name": "매장", "sales_total_responses": "판매성 응답", "sales_nps_score_display": "판매성 NPS",
             "sales_source_nps_score": "판매성 NPS(엑셀원천)", "axis_total_responses": "비판매성 응답", "non_sales_nps_score_display": "비판매성 NPS",
             "non_sales_source_nps_score": "비판매성 NPS(엑셀원천)", "non_sales_target_gap": "비판매성 목표Gap", "non_sales_source_target_gap": "비판매성 목표Gap", "axis_nps": "비판매성 NPS(응답재계산)",
-            "axis_passives": "비판매성 중립", "axis_detractors": "비판매성 비추천", "axis_required_promoters": "필요추천수", "axis_priority_score": "우선순위점수",
+            "axis_passives": "비판매성 중립", "axis_detractors": "비판매성 비추천", "axis_required_promoters": "필요추천수", "axis_priority_score": "Care Priority",
         })
         st.dataframe(weak_view, use_container_width=True, hide_index=True, column_config={
             "판매성 NPS": st.column_config.NumberColumn("판매성 NPS", format="%.1f"),
             "비판매성 NPS": st.column_config.NumberColumn("비판매성 NPS", format="%.1f"),
             "비판매성 NPS(응답재계산)": st.column_config.NumberColumn("비판매성 NPS(응답재계산)", format="%.1f"),
             "비판매성 목표Gap": st.column_config.NumberColumn("비판매성 목표Gap", format="%.1f"),
-            "우선순위점수": st.column_config.NumberColumn("우선순위점수", format="%.1f"),
+            "Care Priority": st.column_config.NumberColumn("Care Priority", format="%.1f"),
         })
 
 st.markdown('<div class="skt-section-title">매장별 Action Sheet</div>', unsafe_allow_html=True)
@@ -899,13 +922,13 @@ else:
         "agency_name": "대리점", "store_code": "매장코드", "store_name": "매장", "axis_nps": "비판매성 NPS", "axis_target_gap": "목표Gap",
         "axis_required_promoters": "필요추천수", "axis_total_responses": "비판매성 응답", "axis_passives": "중립",
         "axis_detractors": "비추천", "top_business_type": "주요 Risk 업무", "top_voc_category": "VOC 분류",
-        "top_risk_count": "Risk건수", "representative_voc": "대표 VOC", "이번주_액션": "이번 주 액션", "axis_priority_score": "우선순위점수",
+        "top_risk_count": "Risk건수", "representative_voc": "대표 VOC", "이번주_액션": "이번 주 액션", "axis_priority_score": "Care Priority",
     }
     action_view = action_source.rename(columns=action_rename)
     st.dataframe(action_view, use_container_width=True, hide_index=True, column_config={
         "비판매성 NPS": st.column_config.NumberColumn("비판매성 NPS", format="%.1f"),
         "목표Gap": st.column_config.NumberColumn("목표Gap", format="%.1f"),
-        "우선순위점수": st.column_config.NumberColumn("우선순위점수", format="%.1f"),
+        "Care Priority": st.column_config.NumberColumn("Care Priority", format="%.1f"),
     })
     dl_col1, dl_col2 = st.columns(2)
     with dl_col1:

@@ -5,7 +5,7 @@ from typing import Any
 
 import pandas as pd
 
-from nps_ops.metrics import nps_score, normalize_nps_series, required_promoters_to_target, sample_grade
+from nps_ops.metrics import nps_score, normalize_nps_series, required_promoters_to_target, sample_confidence, sample_grade
 
 
 VOC_RULES: list[tuple[str, list[str], str]] = [
@@ -68,13 +68,16 @@ def _axis_calc(df: pd.DataFrame, prefix: str, target_score: float) -> pd.DataFra
     )
     out["axis_sample_grade"] = out["axis_total_responses"].apply(sample_grade)
     out["axis_risk_count"] = out["axis_passives"] + out["axis_detractors"]
-    out["axis_priority_score"] = (
+    # Care Priority = Base Risk Score × Sample Confidence (keyed on this axis' response count).
+    out["axis_base_priority_score"] = (
         out["axis_detractors"] * 10
         + out["axis_passives"] * 3
         + out["axis_required_promoters"] * 2
         + out["axis_total_responses"].clip(upper=30) / 10
         + (-out["axis_target_gap"].clip(upper=0) / 10)
     )
+    out["axis_sample_confidence"] = out["axis_total_responses"].apply(sample_confidence)
+    out["axis_priority_score"] = out["axis_base_priority_score"] * out["axis_sample_confidence"]
     return out
 
 

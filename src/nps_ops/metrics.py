@@ -4,6 +4,11 @@ import math
 
 import pandas as pd
 
+from nps_ops.config import (
+    CARE_PRIORITY_LOW_SAMPLE_MULTIPLIER,
+    CARE_PRIORITY_SAMPLE_CONFIDENCE,
+)
+
 
 def nps_score(promoters: float, detractors: float, total: float) -> float | None:
     if total is None or pd.isna(total) or total == 0:
@@ -41,6 +46,23 @@ def required_promoters_to_target(promoters: int, passives: int, detractors: int,
         return 0
     x = (t * total - promoters + detractors) / denom
     return max(0, math.ceil(x))
+
+
+def sample_confidence(n: float) -> float:
+    """Return the Care Priority sample-confidence multiplier for a response count.
+
+    Keyed on the (non-sales) response count so low-sample stores are discounted
+    rather than rewarded. Tiers come from config (``CARE_PRIORITY_SAMPLE_CONFIDENCE``)
+    to stay tunable. Missing/below-min counts fall back to the strong-discount
+    multiplier; classification (``diagnose_store``) still handles hard exclusion.
+    """
+    if n is None or pd.isna(n):
+        return CARE_PRIORITY_LOW_SAMPLE_MULTIPLIER
+    value = float(n)
+    for tier in CARE_PRIORITY_SAMPLE_CONFIDENCE:
+        if value >= tier["min_n"]:
+            return float(tier["multiplier"])
+    return CARE_PRIORITY_LOW_SAMPLE_MULTIPLIER
 
 
 def sample_grade(total: float) -> str:
@@ -115,14 +137,19 @@ def build_store_priority(store_agg: pd.DataFrame, team: str = "전북", target_s
     df["sample_grade"] = df["total_responses"].apply(sample_grade)
     df["risk_count"] = df["passives"] + df["detractors"]
     df["diagnosis_type"] = df.apply(lambda r: diagnose_store(r, target_score), axis=1)
-    # Higher priority: enough responses, detractors/risk, target gap, required promoters.
-    df["priority_score"] = (
+    # Care Priority = Base Risk Score × Sample Confidence.
+    # Base: detractor/passive volume, required promoters to target, sample sufficiency, target gap.
+    df["base_priority_score"] = (
         df["detractors"] * 10
         + df["passives"] * 3
         + df["required_promoters_to_target"] * 2
         + (df["total_responses"].clip(upper=30) / 10)
         + (-df["target_gap"].clip(upper=0) / 10)
     )
+    # Sample Confidence discounts low non-sales-sample stores instead of adding points,
+    # so small-n stores stop ranking at the top by noise.
+    df["sample_confidence"] = df["non_sales_total_responses"].apply(sample_confidence)
+    df["priority_score"] = df["base_priority_score"] * df["sample_confidence"]
     return df.sort_values(["priority_score", "detractors", "total_responses"], ascending=[False, False, False])
 
 

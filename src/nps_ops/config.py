@@ -12,3 +12,16 @@ EXPORT_TOP_N_STORES = 64
 EXPORT_TOP_N_TYPES = 30
 EXPORT_TOP_N_AUDIT = 100
 MAPPING_UNMATCHED_WARN_RATE = 0.05
+
+# Care Priority sample-confidence multipliers.
+# Keyed on the (non-sales) response count and applied as a *multiplier* on the base
+# risk score — not as an additive term — so low-sample stores stop surfacing at the
+# top of the care ranking by noise. Tiers are ordered high→low min_n.
+CARE_PRIORITY_SAMPLE_CONFIDENCE = [
+    {"min_n": 20, "multiplier": 1.00},
+    {"min_n": 10, "multiplier": 0.85},
+    {"min_n": 5, "multiplier": 0.70},
+]
+# n < 5 stores are already split out as 샘플 착시형 in diagnose_store and excluded from
+# the Risk Map; this strong discount keeps them low anywhere the raw score is still used.
+CARE_PRIORITY_LOW_SAMPLE_MULTIPLIER = 0.50
