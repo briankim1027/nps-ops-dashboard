@@ -11,6 +11,7 @@ if str(SRC) not in sys.path:
 
 try:
     import streamlit as st
+    import streamlit.components.v1 as components
     import pandas as pd
     import plotly.express as px
     import plotly.graph_objects as go
@@ -110,7 +111,7 @@ div[data-testid="stMetric"] {background:white; border:1px solid var(--skt-line);
 .skt-ac-rank {font-size:10.5px; font-weight:800; color:#4F46A5; margin-top:5px;}
 .skt-ac-kpis {display:flex; gap:8px; margin:8px 0 4px 0;}
 .skt-ac-kpi {flex:1; background:var(--skt-soft); border-radius:12px; padding:7px 4px; text-align:center;}
-.skt-ac-kpi .k {font-size:10px; font-weight:800; color:var(--skt-muted);}
+.skt-ac-kpi .k {font-size:9px; font-weight:800; color:var(--skt-muted); white-space:normal; line-height:1.25;}
 .skt-ac-kpi .v {font-size:18px; font-weight:900; color:#1A1A1A; letter-spacing:-.03em;}
 .skt-ac-kpi .n {font-size:9.5px; color:#9A9AAE; font-weight:700;}
 .skt-ac-meta {font-size:11.5px; color:#444455; margin:6px 0 2px 0; line-height:1.6;}
@@ -122,6 +123,77 @@ div[data-testid="stMetric"] {background:white; border:1px solid var(--skt-line);
 .skt-ac-verify {font-size:11.5px; color:#249A45; font-weight:700; margin-top:5px;}
 </style>
 """
+# Self-contained Action Card CSS (literal colors, no CSS vars) so it can be inlined
+# inside a components.html iframe AND reused for the print window. Streamlit's
+# st.markdown sanitizer strips <script>/onclick, so cards + print button must render
+# in an iframe via st.components.v1.html instead of st.markdown.
+AC_CARD_CSS = """
+:root{--skt-line:#E8E8F2;--skt-muted:#666678;--skt-soft:#F5F3FF;--skt-purple:#815CF6;}
+*{box-sizing:border-box;}
+body{margin:0;font-family:'Noto Sans KR','Apple SD Gothic Neo',sans-serif;background:transparent;color:#1A1A1A;}
+.skt-ac-card{background:#FFFFFF;border:1px solid #E8E8F2;border-radius:18px;padding:16px 16px 14px 16px;box-shadow:0 8px 22px rgba(13,14,26,.06);margin-bottom:14px;}
+.skt-ac-head{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:10px;}
+.skt-ac-name{font-size:16px;font-weight:900;letter-spacing:-.02em;color:#1A1A1A;line-height:1.25;}
+.skt-ac-sub{font-size:11.5px;color:#666678;margin-top:2px;}
+.skt-ac-badge{flex:0 0 auto;font-size:10.5px;font-weight:800;border-radius:999px;padding:4px 10px;color:white;white-space:nowrap;}
+.skt-ac-rank{font-size:10.5px;font-weight:800;color:#4F46A5;margin-top:5px;}
+.skt-ac-kpis{display:flex;gap:8px;margin:8px 0 4px 0;}
+.skt-ac-kpi{flex:1;background:#F5F3FF;border-radius:12px;padding:7px 4px;text-align:center;}
+.skt-ac-kpi .k{font-size:9px;font-weight:800;color:#666678;white-space:normal;line-height:1.25;}
+.skt-ac-kpi .v{font-size:18px;font-weight:900;color:#1A1A1A;letter-spacing:-.03em;}
+.skt-ac-kpi .n{font-size:9.5px;color:#9A9AAE;font-weight:700;}
+.skt-ac-meta{font-size:11.5px;color:#444455;margin:6px 0 2px 0;line-height:1.6;}
+.skt-ac-meta b{color:#1A1A1A;}
+.skt-ac-zone{font-size:10.5px;font-weight:800;color:#8A8A9C;letter-spacing:.04em;margin:11px 0 4px 0;text-transform:uppercase;}
+.skt-ac-voc{background:#F8F7FF;border-left:3px solid #815CF6;padding:6px 10px;border-radius:8px;font-size:12px;color:#2A2A3A;margin:4px 0;line-height:1.45;}
+.skt-ac-action{font-size:12.5px;color:#26263A;margin:4px 0;line-height:1.5;}
+.skt-ac-goal{background:#FFF6EE;border-radius:9px;padding:6px 10px;font-size:12px;font-weight:800;color:#9A3F12;margin-top:7px;}
+.skt-ac-verify{font-size:11.5px;color:#249A45;font-weight:700;margin-top:5px;}
+"""
+
+# Template rendered per-agency inside an iframe. __CSS__ appears twice (iframe <style>
+# and the print-window JS template literal); both get the same self-contained CSS.
+AC_COMPONENT_TEMPLATE = """<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
+__CSS__
+.ac-toolbar{display:flex;justify-content:flex-end;margin-bottom:10px;}
+.ac-print-btn{background:#F5F3FF;border:1px solid #815CF6;border-radius:8px;padding:5px 9px;cursor:pointer;font-size:15px;line-height:1;color:#4F46A5;display:inline-flex;align-items:center;justify-content:center;}
+.ac-print-btn:hover{background:#815CF6;color:#fff;}
+.ac-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;align-items:start;}
+@media (max-width:760px){.ac-grid{grid-template-columns:1fr;}}
+</style></head><body>
+<div class="ac-toolbar"><button class="ac-print-btn" onclick="printAC()" title="이 대리점 액션카드 출력">🖨️</button></div>
+<div id="__AID__" class="ac-grid">__CARDS__</div>
+<script>
+var PRINT_CSS = `__CSS__ .print-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;align-items:start;padding:14px;} @media print{.skt-ac-card{break-inside:avoid;}}`;
+function printAC(){
+  var content = document.getElementById("__AID__").innerHTML;
+  var w = window.open("", "_blank", "width=1040,height=820");
+  if(!w){ alert("브라우저 팝업이 차단되어 있습니다. 팝업 허용 후 다시 시도하세요."); return; }
+  w.document.open();
+  w.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"><title>__TITLE__ 액션카드</title><style>'+PRINT_CSS+'</style></head><body><h3 style="font-family:sans-serif;margin:14px 14px 0 14px;">__TITLE__ · 액션카드</h3><div class="print-grid">'+content+'</div></body></html>');
+  w.document.close();
+  w.focus();
+  setTimeout(function(){ w.print(); }, 350);
+}
+</script>
+</body></html>"""
+
+
+def render_agency_action_block(agency_id: str, agency_name: str, cards_html: str, n_cards: int) -> tuple[str, int]:
+    """Return (full iframe HTML, height) for one agency's action-card block."""
+    rows = math.ceil(n_cards / 2) if n_cards else 1
+    height = 80 + rows * 560
+    safe_title = str(agency_name).replace("'", "").replace('"', "").replace("\\", "").replace("<", "").replace(">", "")
+    html = (
+        AC_COMPONENT_TEMPLATE
+        .replace("__CSS__", AC_CARD_CSS)
+        .replace("__AID__", agency_id)
+        .replace("__TITLE__", safe_title)
+        .replace("__CARDS__", cards_html)
+    )
+    return html, height
+
+
 st.markdown(SKT_CSS, unsafe_allow_html=True)
 
 
@@ -141,8 +213,11 @@ def _ac_nps(v: float | None, n: int | None = None) -> str:
 
 def render_action_card(card: dict, rank: int | None = None) -> str:
     badge = ACTION_CARD_BADGE.get(card["diagnosis_type"], "#6B7280")
-    gap = card["target_gap"]
-    gap_s = "-" if gap is None or pd.isna(gap) else f"{gap:+.1f}p"
+    dtype = card["diagnosis_type"]
+    ns_gap = card.get("non_sales_gap")
+    sales_gap = card.get("sales_gap")
+    ns_gap_s = "-" if ns_gap is None or pd.isna(ns_gap) else f"{float(ns_gap):+.1f}p"
+    sales_gap_s = "-" if sales_gap is None or pd.isna(sales_gap) else f"{float(sales_gap):+.1f}p"
     rank_html = f"<div class='skt-ac-rank'>Care Priority #{rank} · 신뢰도 ×{card['sample_confidence']:.2f}</div>" if rank else ""
     biz = " · ".join(f"{b} {c}" for b, c in card["top_business_types"]) or "분류 가능한 비추천 업무 없음"
     if card["representative_vocs"]:
@@ -155,6 +230,19 @@ def render_action_card(card: dict, rank: int | None = None) -> str:
     actions = "".join(f"<div class='skt-ac-action'>☐ {a}</div>" for a in card["actions"])
     sales_s = "-" if card["sales_nps"] is None else f"{card['sales_nps']:.0f}"
     ns_s = "-" if card["non_sales_nps"] is None else f"{card['non_sales_nps']:.0f}"
+    month_s = "-" if card["month_nps"] is None else f"{card['month_nps']:.0f}"
+    # Type-specific gap display per spec
+    if dtype == "구조 개선형":
+        meta_gap = (
+            f"판매성 Gap <b>{sales_gap_s}</b> / 비판매성 Gap <b>{ns_gap_s}</b> · 종합 <b>{month_s}</b><br>"
+            f"판매성 <b>{sales_s}</b> / 비판매성 <b>{ns_s}</b>"
+        )
+    else:  # 즉시 개선형 / 비판매성 취약형 — 비판매성 축 우선
+        meta_gap = f"비판매성 Gap <b>{ns_gap_s}</b> · 판매성 <b>{sales_s}</b> / 비판매성 <b>{ns_s}</b>"
+    ns_r7 = card.get("ns_recent7_nps")
+    ns_td = card.get("ns_today_nps")
+    ns_r7_n = card.get("ns_recent7_n", 0)
+    ns_td_n = card.get("ns_today_n", 0)
     return f"""
 <div class="skt-ac-card">
   <div class="skt-ac-head">
@@ -166,11 +254,11 @@ def render_action_card(card: dict, rank: int | None = None) -> str:
     <div class="skt-ac-badge" style="background:{badge}">{card['diagnosis_type']}</div>
   </div>
   <div class="skt-ac-kpis">
-    <div class="skt-ac-kpi"><div class="k">월누적</div><div class="v">{_ac_nps(card['month_nps'])}</div></div>
-    <div class="skt-ac-kpi"><div class="k">최근7일</div><div class="v">{_ac_nps(card['recent7_nps'], card['recent7_n'])}</div></div>
-    <div class="skt-ac-kpi"><div class="k">오늘</div><div class="v">{_ac_nps(card['today_nps'], card['today_n'])}</div></div>
+    <div class="skt-ac-kpi"><div class="k">종합</div><div class="v">{_ac_nps(card['month_nps'])}</div></div>
+    <div class="skt-ac-kpi"><div class="k">최근7일 비판매성</div><div class="v">{_ac_nps(ns_r7, ns_r7_n if ns_r7_n else None)}</div></div>
+    <div class="skt-ac-kpi"><div class="k">오늘 비판매성</div><div class="v">{_ac_nps(ns_td, ns_td_n if ns_td_n else None)}</div></div>
   </div>
-  <div class="skt-ac-meta">목표Gap <b>{gap_s}</b> · 판매성 <b>{sales_s}</b> / 비판매성 <b>{ns_s}</b><br>
+  <div class="skt-ac-meta">{meta_gap}<br>
   응답 <b>{card['total']}</b> · 추천 {card['promoters']} · 중립 {card['passives']} · 비추천 {card['detractors']}</div>
   <div class="skt-ac-zone">왜 문제</div>
   <div class="skt-ac-meta">비추천 업무 Top: {biz}</div>
@@ -874,14 +962,16 @@ for tab, dtype in zip(action_tabs, ACTION_CARD_TYPES):
         agency_order = subset.groupby("agency_name")["_ps"].max().sort_values(ascending=False).index.tolist()
         for a_idx, agency in enumerate(agency_order):
             stores = subset[subset["agency_name"].eq(agency)]
+            agency_id = f"ac_{dtype.replace(' ', '')}_{a_idx}"
             with st.expander(f"{agency} · {len(stores)}곳", expanded=(a_idx == 0)):
-                cols = st.columns(2)
-                for s_idx, (_, store_row) in enumerate(stores.iterrows()):
+                cards_html = ""
+                for _, store_row in stores.iterrows():
                     code = str(store_row.get("store_code", "")).strip()
                     store_neg = card_negative[card_negative["store_code"].eq(code)] if not card_negative.empty and "store_code" in card_negative.columns else pd.DataFrame()
                     card = build_store_action_card(store_row, store_neg, store_daily_lookup, target_score)
-                    with cols[s_idx % 2]:
-                        st.markdown(render_action_card(card, rank=care_rank_map.get(code)), unsafe_allow_html=True)
+                    cards_html += render_action_card(card, rank=care_rank_map.get(code))
+                block_html, block_height = render_agency_action_block(agency_id, str(agency), cards_html, len(stores))
+                components.html(block_html, height=block_height, scrolling=True)
 
 st.markdown('<div class="skt-section-title">비판매성 NPS 전용 상세</div>', unsafe_allow_html=True)
 st.markdown('<div class="skt-section-caption">비판매성 업무유형 Top, 매장별 추이, 판매성은 양호하지만 비판매성만 낮은 매장을 별도로 봅니다.</div>', unsafe_allow_html=True)

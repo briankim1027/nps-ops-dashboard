@@ -672,7 +672,9 @@ def build_store_daily_lookup(response_fact: pd.DataFrame, team: str = "전북") 
     """Per-store recent-7-day and latest-day NPS inputs from the response ledger.
 
     Returns {store_code: {"today": (promoters, detractors, total),
-                          "recent7": (promoters, detractors, total)}}.
+                          "recent7": (promoters, detractors, total),
+                          "ns_today": (promoters, detractors, total),   # 비판매성 only
+                          "ns_recent7": (promoters, detractors, total)}}.
     Latest day = max 업무처리일자 in the ledger; recent7 = trailing 7-day window ending there.
     """
     df = _prepare_team_response_fact(response_fact, team)
@@ -682,13 +684,23 @@ def build_store_daily_lookup(response_fact: pd.DataFrame, team: str = "전북") 
     df["store_code"] = df["store_code"].astype(str).str.strip()
     max_date = df["trend_date"].max()
     recent7_start = max_date - pd.Timedelta(days=6)
+    ns_df = df[df["NCSI"].astype(str).str.strip().eq("비판매성")].copy() if "NCSI" in df.columns else pd.DataFrame(columns=df.columns)
+    ns_groups: dict[str, pd.DataFrame] = {}
+    if not ns_df.empty and "store_code" in ns_df.columns:
+        for code, g in ns_df.groupby("store_code"):
+            ns_groups[str(code).strip()] = g
     out: dict[str, dict[str, tuple[int, int, int]]] = {}
     for code, g in df.groupby("store_code"):
         today = g[g["trend_date"].eq(max_date)]
         recent = g[g["trend_date"].ge(recent7_start)]
+        ns_g = ns_groups.get(str(code), pd.DataFrame())
+        ns_today = ns_g[ns_g["trend_date"].eq(max_date)] if not ns_g.empty else pd.DataFrame()
+        ns_recent = ns_g[ns_g["trend_date"].ge(recent7_start)] if not ns_g.empty else pd.DataFrame()
         out[code] = {
             "today": (int(today["promoter_flag"].sum()), int(today["detractor_flag"].sum()), int(len(today))),
             "recent7": (int(recent["promoter_flag"].sum()), int(recent["detractor_flag"].sum()), int(len(recent))),
+            "ns_today": (int(ns_today["promoter_flag"].sum()), int(ns_today["detractor_flag"].sum()), int(len(ns_today))) if not ns_today.empty else (0, 0, 0),
+            "ns_recent7": (int(ns_recent["promoter_flag"].sum()), int(ns_recent["detractor_flag"].sum()), int(len(ns_recent))) if not ns_recent.empty else (0, 0, 0),
         }
     return out
 
@@ -783,6 +795,12 @@ def build_store_action_card(store_row: pd.Series, store_negative: pd.DataFrame, 
     sales_nps = store_row.get("sales_nps_recalc")
     sales_nps = float(sales_nps) if pd.notna(sales_nps) else None
 
+    # ② non-sales time-intelligence
+    nsr7p, nsr7d, nsr7t = daily.get("ns_recent7", (0, 0, 0))
+    nstdp, nstdd, nstdt = daily.get("ns_today", (0, 0, 0))
+    ns_recent7_nps = _nps_from_counts(nsr7p, nsr7d, nsr7t)
+    ns_today_nps = _nps_from_counts(nstdp, nstdd, nstdt)
+
     # ③ evidence — business type scope is type-specific
     if dtype == "즉시 개선형" and not neg.empty and "response_type" in neg.columns:
         scope = neg[neg["response_type"].astype(str).str.strip().eq("비추천")]
@@ -835,8 +853,12 @@ def build_store_action_card(store_row: pd.Series, store_negative: pd.DataFrame, 
         "month_nps": month_nps,
         "recent7_nps": recent7_nps, "recent7_n": int(r7t),
         "today_nps": today_nps, "today_n": int(tdt),
+        "ns_recent7_nps": ns_recent7_nps, "ns_recent7_n": int(nsr7t),
+        "ns_today_nps": ns_today_nps, "ns_today_n": int(nstdt),
         "trend_arrow": _trend_arrow(month_nps, recent7_nps, today_nps),
         "target_gap": (month_nps - target_score) if month_nps is not None else None,
+        "non_sales_gap": (non_sales_nps - target_score) if non_sales_nps is not None else None,
+        "sales_gap": (sales_nps - target_score) if sales_nps is not None else None,
         "promoters": promoters, "passives": passives, "detractors": detractors, "total": total,
         "sales_nps": sales_nps, "non_sales_nps": non_sales_nps,
         "top_business_types": top_business_types,

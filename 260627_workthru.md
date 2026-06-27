@@ -191,3 +191,71 @@ cd /home/brian/workplace/nps-ops-dashboard
 - 회복 가능형 Quick Win 카드(보류) 재검토
 - VOC 축 정밀 분리(response_fact NCSI 조인)로 비판매성 취약형 카드 biz Top 정확도 향상
 - 카드 → CSV/PDF 현장 배포 export
+
+---
+
+# 260627 (저녁 추가) — Action Card 유형별 목표Gap 정합화 & 대리점별 출력
+
+## 결론
+
+Action Card의 `목표Gap`을 **종합 NPS 고정에서 "해당 카드가 문제 삼는 축" 기준으로** 바꿨다.
+KPI 라벨도 비판매성 care 카드 성격에 맞게 명확화하고, **대리점 단위 출력(🖨️)** 기능을 추가했다.
+구현 중 발견한 렌더링 버그 3건(비판매성 KPI·Gap 미표시, 출력 무반응)도 같은 뿌리에서 해결했다.
+
+## 1. 유형별 목표Gap 기준 (지시서 반영)
+
+`목표Gap`은 카드가 문제 삼는 축 기준으로 표시한다.
+
+| 유형 | 표시 기준 | 예시 |
+|---|---|---|
+| 즉시 개선형 | 비판매성 Gap 우선 (판매성만 문제 시 fallback) | `비판매성 Gap -37.0p · 판매성 91 / 비판매성 50` |
+| 비판매성 취약형 | 비판매성 Gap | `비판매성 Gap -9.2p · 판매성 89 / 비판매성 78` |
+| 구조 개선형 | **양축 Gap 동시** + 종합 | `판매성 Gap -7.0p / 비판매성 Gap -37.0p · 종합 71` (+ 뒷줄 판매성 80 / 비판매성 50) |
+| (향후) 판매성 취약형 | 판매성 Gap | — |
+
+- 구조 개선형은 "양축이 같이 흔들리는 매장"이라 단일 Gap만 보여주면 부족 → 반드시 둘 다 표기.
+
+## 2. KPI 라벨 비판매성 정합화
+
+- `월누적` → **`종합`** (종합 NPS임을 명확화, 오해 방지).
+- `최근7일`/`오늘` → **`최근7일 비판매성`/`오늘 비판매성`**: 종합값이 아니라 **비판매성 전용 일별 NPS**를 표시하도록 변경 (Care 카드가 비판매성 중심이므로 자연스러움).
+- 이를 위해 `build_store_daily_lookup`에 비판매성(`NCSI=비판매성`)만 필터한 `ns_today`/`ns_recent7` 집계 추가.
+- `build_store_action_card`에 `ns_recent7_nps`/`ns_today_nps`, `non_sales_gap`/`sales_gap` 필드 추가.
+
+## 3. 렌더링 버그 3건 — 단일 뿌리 (Streamlit sanitizer)
+
+증상: ① 최근7일/오늘 비판매성 숫자 미표시 ② 비판매성 Gap 미표시 ③ 🖨️ 출력 클릭 무반응.
+
+- **원인**: `st.markdown(unsafe_allow_html=True)`의 보안 sanitizer가 `<script>`·`<button onclick>`을 제거.
+  전체 카드를 `<button onclick>` + 통합 HTML 한 덩어리로 `st.markdown`에 넘겨, 비표준 요소 제거 과정에서
+  블록이 깨져 숫자 누락 + 스크립트 제거로 출력 무반응이 동시 발생.
+- **해결**: 대리점 카드 블록을 **`st.components.v1.html()` (iframe)** 으로 렌더.
+  iframe 안에서는 JS 실행 + HTML이 sanitize 없이 그대로 렌더된다.
+  - iframe은 부모 CSS 미상속 → 카드 CSS를 self-contained(`AC_CARD_CSS`, literal 색상)로 인라인.
+  - `AC_COMPONENT_TEMPLATE` + `render_agency_action_block()`로 대리점별 iframe HTML/높이 생성.
+
+## 4. 대리점별 출력 (🖨️)
+
+- 각 대리점 expander 우측 상단 **🖨️ 아이콘 버튼** (텍스트 없이 아이콘만, 설명은 `title` 툴팁).
+- 클릭 시 새 창에 해당 대리점 카드 HTML+CSS를 복사하고 `window.print()` 호출 → 대리점 단위 인쇄/PDF 저장.
+- 사용자 클릭 기반이라 팝업 차단에 안 걸림(차단 시 안내 alert). 출력 제목 = 대리점명(특수문자 sanitize).
+
+## 5. 검증 기록 (본텔점 지시서 검산 일치)
+
+```bash
+.venv/bin/python -m py_compile app.py src/nps_ops/insights.py   # COMPILE_OK
+.venv/bin/python -m pytest -q                                   # 23 passed
+.venv/bin/python -m streamlit run app.py --server.headless --port 8501   # HTTP 200
+```
+
+| 유형 | 매장 | 종합 | 최근7일 비판매성 | 오늘 비판매성 | Gap |
+|---|---|---|---|---|---|
+| 즉시 개선형 | 본텔점(본점) | 70 | 100 (n7) | – | 비판매성 Gap -37.0p · 판매성 91 / 비판매성 50 |
+| 비판매성 취약형 | 군산진포 희망점 | 83 | 69 (n13) | – | 비판매성 Gap -9.2p · 판매성 89 / 비판매성 78 |
+| 구조 개선형 | 신세계 고창점 | 71 | 0 (n2) | – | 판매성 Gap -7.0p / 비판매성 Gap -37.0p · 종합 71 |
+
+- 본텔점 지시서 기준 일치: 비판매성 50.0 → Gap -37.0 ✓, 최근7일 100 ✓, 오늘 null(–) ✓, 판매성 90.9(91)·종합 69.6(70) 참조 ✓.
+
+## 6. 운영 메모
+
+- 깨진 `.venv/bin/streamlit` 런처(shebang이 `/home/mysktelecom/...` 가리킴) → **`python -m streamlit`** 로 실행.
