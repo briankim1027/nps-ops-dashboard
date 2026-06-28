@@ -260,13 +260,13 @@ def render_action_card(card: dict, rank: int | None = None) -> str:
   </div>
   <div class="skt-ac-meta">{meta_gap}<br>
   응답 <b>{card['total']}</b> · 추천 {card['promoters']} · 중립 {card['passives']} · 비추천 {card['detractors']}</div>
-  <div class="skt-ac-zone">왜 문제</div>
+  <div class="skt-ac-zone">우선 케어 이유</div>
   <div class="skt-ac-meta">비추천 업무 Top: {biz}</div>
   {vocs}
   <div class="skt-ac-zone">이번 주 액션</div>
   {actions}
   <div class="skt-ac-goal">🎯 {card['quant_goal']}</div>
-  <div class="skt-ac-verify">✔ 다음 점검: {card['verify_metric']}</div>
+  <div class="skt-ac-verify">✔ 다음 확인 지표: {card['verify_metric']}</div>
 </div>
 """
 
@@ -472,11 +472,11 @@ def build_trend_regression_insight(daily_trend: pd.DataFrame) -> str:
         non_sales_result = results["비판매성 응답"]
         max_corr = max(abs(float(total["corr"])), abs(float(non_sales_result["corr"])))
         strength_msg = "상관은 약합니다" if max_corr < 0.2 else ("중간 수준의 상관이 보입니다" if max_corr < 0.5 else "강한 상관이 보입니다")
-        return f"월간 일별 회귀 기준, {phrase(total)}, {phrase(non_sales_result)}이며 업무량-비판매성 NPS {strength_msg}."
+        return f"업무량 증가가 비판매성 NPS 하락을 강하게 설명하지는 않습니다. 참고로 월간 일별 회귀 기준 {phrase(total)}, {phrase(non_sales_result)}이며 업무량-비판매성 NPS {strength_msg}."
 
     best = max(results.values(), key=lambda r: abs(float(r["corr"])))
     strength = "강한" if abs(float(best["corr"])) >= 0.6 else ("중간" if abs(float(best["corr"])) >= 0.35 else "약한")
-    return f"월간 일별 회귀 기준, {phrase(best)}하는 {strength} 상관이 관찰됩니다."
+    return f"업무량과 비판매성 NPS의 관계는 참고 신호로 봅니다. 월간 일별 회귀 기준 {phrase(best)}하는 {strength} 상관이 관찰됩니다."
 
 trend_regression_insight = build_trend_regression_insight(daily_nps_trend)
 
@@ -494,9 +494,28 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+operating_weak_axis = "비판매성"
+operating_today_risk = None
+if not nps_time_intelligence.empty:
+    _ti0 = nps_time_intelligence.iloc[0]
+    operating_weak_axis = str(_ti0.get("weak_axis", operating_weak_axis) or operating_weak_axis)
+    operating_today_risk = _ti0.get("today_risk_count")
+operating_today_risk_text = ""
+if operating_today_risk is not None and pd.notna(operating_today_risk):
+    operating_today_risk_text = f" 오늘 중립/비추천 {int(operating_today_risk):,}건은 업무유형과 VOC를 먼저 확인하세요."
+st.markdown(
+    f"""
+    <div class="skt-help-box">
+      <div class="skt-help-title">오늘의 Operating Message</div>
+      <div class="skt-help-item"><span class="skt-chip orange">오늘의 판단</span><span class="skt-help-text">종합 NPS는 목표권 흐름을 유지하고 있지만, {operating_weak_axis} 축 기준 월누적 위험매장 <b>{monthly_risk_store_count:,}곳</b>이 있어 Care Priority 상위 매장부터 VOC와 업무유형을 확인해야 합니다.{operating_today_risk_text}</span></div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
 trend_title_col, date_from_col, date_to_col = st.columns([0.58, 0.21, 0.21])
 with trend_title_col:
-    st.markdown('<div class="skt-section-title">6월 NPS Trend</div>', unsafe_allow_html=True)
+    st.markdown('<div class="skt-section-title">이번 주 NPS 판세 — 오늘 취약축 확인</div>', unsafe_allow_html=True)
     st.markdown(f'<div class="skt-section-caption">{trend_regression_insight}</div>', unsafe_allow_html=True)
 
 if nps_time_intelligence.empty or daily_nps_trend.empty:
@@ -682,8 +701,8 @@ risk_score_formula_html = f"""
 </div>
 """
 
-st.markdown('<div class="skt-section-title">매장 NPS Risk Map — 6월 월누적 기준</div>', unsafe_allow_html=True)
-st.markdown('<div class="skt-section-caption">X축=비판매성 응답 수 · Y축=비판매성 NPS · Bubble=전체 응답건수로 매장별 월누적 risk를 포지셔닝합니다.</div>', unsafe_allow_html=True)
+st.markdown('<div class="skt-section-title">매장 NPS Risk Map — 비판매성 케어 우선순위</div>', unsafe_allow_html=True)
+st.markdown('<div class="skt-section-caption">비판매성 응답이 쌓였는데 NPS가 낮은 매장을 우선 케어 후보로 봅니다. 우측 하단 또는 Care Priority 상위 매장이 이번 주 확인 대상입니다.</div>', unsafe_allow_html=True)
 
 risk_excluded_types = {"관찰/유지형", "샘플 착시형"}
 risk_map = priority_view_base.copy()
@@ -868,9 +887,10 @@ else:
     st.plotly_chart(fig, use_container_width=True)
 
 st.markdown(risk_score_formula_html, unsafe_allow_html=True)
+st.markdown('<div class="skt-priority-note">우측 하단/상위 bar에 있는 매장은 아래 Coaching Card에서 VOC 근거와 이번 주 코칭 문구를 확인하세요. 굵은 기울임 매장은 반복 Hot Spot에도 잡힌 공통 action 후보입니다.</div>', unsafe_allow_html=True)
 
-st.markdown('<div class="skt-section-title">NPS Hot Spot Mesh</div>', unsafe_allow_html=True)
-st.markdown('<div class="skt-section-caption">날짜×매장 heatmap은 월 중 risk(중립/비추천)가 <b>2일 이상 반복 발생</b>한 매장만 발생일 수 순으로 추립니다. 매장명 옆 (N일)은 risk 발생일 수, <b><i>굵은 기울임</i></b>은 Care Priority Top 20과도 겹치는 공통 action 매장입니다. 아래 요일 그래프는 비판매성 응답량과 risk율을 함께 봅니다.</div>', unsafe_allow_html=True)
+st.markdown('<div class="skt-section-title">반복 Risk 확인 — 며칠째 흔들리는 매장인가</div>', unsafe_allow_html=True)
+st.markdown('<div class="skt-section-caption">중립/비추천이 <b>2일 이상 반복</b>된 매장만 추려 단발 이슈와 반복 이슈를 분리합니다. 굵은 기울임 매장은 Care Priority Top 20에도 잡힌 공통 action 후보이며, 아래 요일 그래프는 비판매성 응답량과 risk율을 함께 봅니다.</div>', unsafe_allow_html=True)
 if store_daily_heatmap_view_base.empty or hot_spot_store_rank.empty:
     st.info("반복(2일 이상) risk 발생 매장이 없습니다.")
 else:
@@ -933,8 +953,8 @@ else:
         fig.update_layout(height=520, plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", margin=dict(l=10, r=10, t=20, b=10))
         st.plotly_chart(fig, use_container_width=True)
 
-st.markdown('<div class="skt-section-title">유형별 대응방안</div>', unsafe_allow_html=True)
-st.markdown('<div class="skt-section-caption">Care가 필요한 3개 유형을 탭으로 나누고, 대리점별로 매장 Action Card를 제공합니다. 카드는 상태(월누적·최근7일·오늘 NPS)→근거(비추천 업무·대표 VOC)→이번 주 액션 순으로 읽도록 구성했습니다. 정렬은 Care Priority 순입니다.</div>', unsafe_allow_html=True)
+st.markdown('<div class="skt-section-title">매장별 Coaching Card — 이번 주 바로 전달할 액션</div>', unsafe_allow_html=True)
+st.markdown('<div class="skt-section-caption">유형별로 매장을 나누고, 각 카드에서 상태 → VOC 근거 → 이번 주 코칭 → 다음 점검 지표 순으로 봅니다. 정렬은 Care Priority 순입니다.</div>', unsafe_allow_html=True)
 
 # Global Care Priority rank for card headers.
 _rank_src = priority_view_base.copy()
@@ -973,8 +993,8 @@ for tab, dtype in zip(action_tabs, ACTION_CARD_TYPES):
                 block_html, block_height = render_agency_action_block(agency_id, str(agency), cards_html, len(stores))
                 components.html(block_html, height=block_height, scrolling=True)
 
-st.markdown('<div class="skt-section-title">비판매성 NPS 전용 상세</div>', unsafe_allow_html=True)
-st.markdown('<div class="skt-section-caption">비판매성 업무유형 Top, 매장별 추이, 판매성은 양호하지만 비판매성만 낮은 매장을 별도로 봅니다.</div>', unsafe_allow_html=True)
+st.markdown('<div class="skt-section-title">비판매성 Drill-down — Action Card 근거 확인</div>', unsafe_allow_html=True)
+st.markdown('<div class="skt-section-caption">Action Card의 근거를 더 확인하는 영역입니다. 비판매성 업무유형, 매장별 추이, 판매성은 양호하지만 비판매성만 낮은 매장을 분리해 봅니다.</div>', unsafe_allow_html=True)
 ns_tab1, ns_tab2, ns_tab3, ns_tab4 = st.tabs(["집중관리 매장", "업무유형 Top", "매장별 추이", "판매성 양호·비판매성 취약"])
 with ns_tab1:
     if non_sales_drilldown_view_base.empty:
@@ -1076,8 +1096,35 @@ with ns_tab4:
             "Care Priority": st.column_config.NumberColumn("Care Priority", format="%.1f"),
         })
 
-st.markdown('<div class="skt-section-title">매장별 Action Sheet</div>', unsafe_allow_html=True)
-st.markdown('<div class="skt-section-caption">대리점 필터/다운로드와 TOP 10 별도 출력이 가능한 현장 실행표입니다. 이번 주 액션은 1~2줄로 바로 전달 가능하게 정리했습니다.</div>', unsafe_allow_html=True)
+st.markdown('<div class="skt-section-title">T크루 Coaching 후보 — 매장 코칭을 사람 단위로 좁히기</div>', unsafe_allow_html=True)
+st.markdown('<div class="skt-section-caption">개인 평가가 아니라 코칭 후보 탐색입니다. n≥5 기준에서 중립/비추천 건수와 목표 Gap을 함께 보고, 매장 코칭 시 확인할 대상을 좁힙니다.</div>', unsafe_allow_html=True)
+if crew.empty:
+    st.info("T크루 데이터가 없습니다.")
+else:
+    crew_team = crew[crew["team_name"].astype(str).str.strip().eq(team)].copy() if "team_name" in crew.columns else crew.copy()
+    for c in ["promoters", "passives", "detractors", "total_responses"]:
+        crew_team[c] = pd.to_numeric(crew_team.get(c, 0), errors="coerce").fillna(0)
+    crew_team["NPS"] = crew_team.apply(lambda r: ((r["promoters"] - r["detractors"]) / r["total_responses"] * 100) if r["total_responses"] else None, axis=1)
+    crew_team["목표Gap"] = crew_team["NPS"] - target_score
+    crew_team["Risk건수"] = crew_team["passives"] + crew_team["detractors"]
+    crew_team["코칭우선점수"] = crew_team["detractors"] * 10 + crew_team["passives"] * 3 + (-crew_team["목표Gap"].clip(upper=0) / 10) + crew_team["total_responses"].clip(upper=20) / 10
+    coach = crew_team[crew_team["total_responses"] >= 5].sort_values(["코칭우선점수", "detractors", "total_responses"], ascending=False).head(50)
+    coach_cols = [c for c in ["agency_name", "crew_name", "total_responses", "promoters", "passives", "detractors", "NPS", "목표Gap", "Risk건수", "코칭우선점수"] if c in coach.columns]
+    coach_view = coach[coach_cols].rename(columns={
+        "agency_name": "대리점", "crew_name": "T크루", "total_responses": "총응답자", "promoters": "추천", "passives": "중립", "detractors": "비추천",
+    })
+    st.dataframe(
+        coach_view,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "NPS": st.column_config.NumberColumn("NPS", format="%.1f"),
+            "목표Gap": st.column_config.NumberColumn("목표Gap", format="%.1f"),
+            "코칭우선점수": st.column_config.NumberColumn("코칭우선점수", format="%.1f"),
+        },
+    )
+st.markdown('<div class="skt-section-title">매장별 Action Sheet — 다운로드/공유용 실행표</div>', unsafe_allow_html=True)
+st.markdown('<div class="skt-section-caption">대리점 필터/다운로드와 TOP 10 별도 출력이 가능한 실행표입니다. 위 Coaching Card와 Drill-down에서 확인한 내용을 공유·점검용 표로 정리합니다.</div>', unsafe_allow_html=True)
 if action_sheet_view_base.empty:
     st.info("Action Sheet 데이터가 없습니다.")
 else:
@@ -1111,7 +1158,7 @@ else:
             mime="text/csv",
         )
 
-st.markdown('<div class="skt-section-title">검산 / 샘플 경고</div>', unsafe_allow_html=True)
+st.markdown('<div class="skt-section-title">Audit Check — 원천 차이와 소표본 확인</div>', unsafe_allow_html=True)
 st.markdown('<div class="skt-section-caption">운영 판단은 재계산 NPS로 고정하되, 원천 Excel NPS와 차이가 큰 매장과 표본이 작은 축은 별도로 확인합니다.</div>', unsafe_allow_html=True)
 audit_tab1, audit_tab2 = st.tabs(["원천 vs 재계산 차이 Top", "샘플소수 경고"])
 with audit_tab1:
@@ -1143,28 +1190,8 @@ with audit_tab2:
             "재계산 NPS": st.column_config.NumberColumn("재계산 NPS", format="%.1f"),
         })
 
-left, right = st.columns(2)
-with left:
-    st.markdown('<div class="skt-section-title">진단 유형 분포</div>', unsafe_allow_html=True)
-    diag = priority_view_base["diagnosis_type"].value_counts().reset_index()
-    diag.columns = ["diagnosis_type", "count"]
-    fig = px.bar(diag, x="diagnosis_type", y="count", color="diagnosis_type", color_discrete_sequence=["#815CF6", "#DC6339", "#C045F6", "#E0CD4E", "#5FCE73", "#6B7280"])
-    fig.update_layout(showlegend=False, plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", xaxis_title=None, yaxis_title=None)
-    st.plotly_chart(fig, use_container_width=True)
-with right:
-    st.markdown('<div class="skt-section-title">비추천/중립 Risk Top</div>', unsafe_allow_html=True)
-    tmp = priority_view_base.copy()
-    missing_risk_cols = [c for c in ["passives", "detractors"] if c not in tmp.columns]
-    if missing_risk_cols:
-        st.error(f"Risk 차트 필수 컬럼 누락: {missing_risk_cols}. 데이터 빌드를 다시 확인하세요.")
-        st.stop()
-    tmp["risk_count"] = pd.to_numeric(tmp["passives"], errors="coerce").fillna(0) + pd.to_numeric(tmp["detractors"], errors="coerce").fillna(0)
-    top = tmp.sort_values("risk_count", ascending=False).head(15).rename(columns={"passives": "중립", "detractors": "비추천"})
-    fig = px.bar(top, x="store_name", y=["중립", "비추천"], barmode="stack", color_discrete_sequence=["#E0CD4E", "#DC6339"])
-    fig.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", xaxis_title=None, yaxis_title="건수", legend_title_text=None)
-    st.plotly_chart(fig, use_container_width=True)
-
-st.markdown('<div class="skt-section-title">VOC / 중립·비추천</div>', unsafe_allow_html=True)
+st.markdown('<div class="skt-section-title">VOC 근거 확인 — 중립·비추천 원문과 업무유형</div>', unsafe_allow_html=True)
+st.markdown('<div class="skt-section-caption">대표 VOC 밖의 원문과 업무유형 근거를 확인하는 Evidence layer입니다. 코칭 문구를 공유하기 전 원문 맥락이 필요할 때 확인합니다.</div>', unsafe_allow_html=True)
 if negative.empty:
     st.info("negative_feedback 데이터가 없습니다.")
 else:
@@ -1201,30 +1228,3 @@ else:
         })
         st.dataframe(voc_view, use_container_width=True, hide_index=True)
 
-st.markdown('<div class="skt-section-title">T크루 코칭 후보</div>', unsafe_allow_html=True)
-st.markdown('<div class="skt-section-caption">개인 줄세우기보다 n≥5 기준의 코칭 후보를 먼저 보도록 구성했습니다. 비추천/중립 건수와 목표 Gap을 함께 봅니다.</div>', unsafe_allow_html=True)
-if crew.empty:
-    st.info("T크루 데이터가 없습니다.")
-else:
-    crew_team = crew[crew["team_name"].astype(str).str.strip().eq(team)].copy() if "team_name" in crew.columns else crew.copy()
-    for c in ["promoters", "passives", "detractors", "total_responses"]:
-        crew_team[c] = pd.to_numeric(crew_team.get(c, 0), errors="coerce").fillna(0)
-    crew_team["NPS"] = crew_team.apply(lambda r: ((r["promoters"] - r["detractors"]) / r["total_responses"] * 100) if r["total_responses"] else None, axis=1)
-    crew_team["목표Gap"] = crew_team["NPS"] - target_score
-    crew_team["Risk건수"] = crew_team["passives"] + crew_team["detractors"]
-    crew_team["코칭우선점수"] = crew_team["detractors"] * 10 + crew_team["passives"] * 3 + (-crew_team["목표Gap"].clip(upper=0) / 10) + crew_team["total_responses"].clip(upper=20) / 10
-    coach = crew_team[crew_team["total_responses"] >= 5].sort_values(["코칭우선점수", "detractors", "total_responses"], ascending=False).head(50)
-    coach_cols = [c for c in ["agency_name", "crew_name", "total_responses", "promoters", "passives", "detractors", "NPS", "목표Gap", "Risk건수", "코칭우선점수"] if c in coach.columns]
-    coach_view = coach[coach_cols].rename(columns={
-        "agency_name": "대리점", "crew_name": "T크루", "total_responses": "총응답자", "promoters": "추천", "passives": "중립", "detractors": "비추천",
-    })
-    st.dataframe(
-        coach_view,
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "NPS": st.column_config.NumberColumn("NPS", format="%.1f"),
-            "목표Gap": st.column_config.NumberColumn("목표Gap", format="%.1f"),
-            "코칭우선점수": st.column_config.NumberColumn("코칭우선점수", format="%.1f"),
-        },
-    )
