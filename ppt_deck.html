@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>전북팀 NPS 운영 Dashboard 소개 — 전체 덱</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Nanum+Myeongjo:wght@400;700&family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --canvas:#faf9f5; --surface-soft:#f5f0e8; --surface-card:#efe9de; --surface-cream-strong:#e8e0d2;
+    --surface-dark:#181715; --surface-dark-elevated:#252320; --surface-dark-soft:#1f1e1b;
+    --hairline:#e6dfd8; --hairline-soft:#ebe6df;
+    --primary:#cc785c; --primary-active:#a9583e; --accent-teal:#5db8a6; --accent-amber:#e8a55a;
+    --ink:#141413; --body-strong:#252523; --body:#3d3d3a; --muted:#6c6a64; --muted-soft:#8e8b82;
+    --on-dark:#faf9f5; --on-dark-soft:#a09d96; --success:#5db872; --error:#c64545;
+    --display:"Fraunces","Nanum Myeongjo",Garamond,"Times New Roman",serif;
+    --sans:"Inter","Noto Sans KR",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  html,body{background:#d8d2c6;font-family:var(--sans);color:var(--ink);-webkit-font-smoothing:antialiased;}
+  body{display:flex;flex-direction:column;align-items:center;gap:30px;padding:40px 20px;}
+  .caption{width:1280px;color:#5b574e;font-size:13px;font-family:var(--mono);}
+
+  .slide{width:1280px;height:720px;position:relative;overflow:hidden;border-radius:12px;
+    box-shadow:0 18px 50px rgba(20,20,19,.16);padding:60px 84px;display:flex;flex-direction:column;
+    -webkit-print-color-adjust:exact;print-color-adjust:exact;}
+  .cream{background:var(--canvas);}
+  .card{background:var(--surface-card);}
+  .dark{background:var(--surface-dark);color:var(--on-dark);}
+  .coral{background:var(--primary);color:#fff;}
+
+  /* header */
+  .top{display:flex;justify-content:space-between;align-items:center;}
+  .wm{display:flex;align-items:center;gap:9px;}
+  .wm .name{font-weight:600;font-size:16px;letter-spacing:.2px;}
+  .pageno{font-size:13px;font-weight:500;color:var(--muted-soft);}
+  .dark .pageno,.coral .pageno{color:var(--on-dark-soft);}
+  .dark .wm .name,.coral .wm .name{color:var(--on-dark);}
+  .coral .pageno{color:rgba(255,255,255,.7);}
+
+  /* eyebrow / badges */
+  .eyebrow{display:inline-flex;align-items:center;gap:8px;align-self:flex-start;margin-top:40px;
+    font-size:12px;font-weight:500;letter-spacing:1.5px;text-transform:uppercase;color:var(--primary);}
+  .eyebrow .dot{width:6px;height:6px;border-radius:50%;background:var(--primary);}
+  .badge{display:inline-flex;align-self:flex-start;margin-top:36px;background:var(--primary);color:#fff;
+    font-size:12px;font-weight:500;letter-spacing:1.5px;text-transform:uppercase;padding:5px 13px;border-radius:9999px;}
+  .dark .eyebrow{color:var(--accent-amber);} .dark .eyebrow .dot{background:var(--accent-amber);}
+
+  /* headings */
+  h1{font-family:var(--display);font-weight:400;font-size:56px;line-height:1.12;letter-spacing:-1.4px;margin-top:20px;max-width:1040px;}
+  h2{font-family:var(--display);font-weight:400;font-size:40px;line-height:1.15;letter-spacing:-1px;margin-top:16px;max-width:900px;}
+  .accent{color:var(--primary);}
+  .dark h2{color:var(--on-dark);}
+  .lead{margin-top:20px;max-width:840px;font-size:18px;line-height:1.6;color:var(--body);}
+  .lead strong{color:var(--body-strong);font-weight:600;}
+  .dark .lead{color:var(--on-dark-soft);} .dark .lead em{color:var(--accent-amber);font-style:normal;font-weight:500;}
+  .coral .lead{color:rgba(255,255,255,.92);}
+
+  .fill{margin-top:auto;}
+
+  /* pills / flow */
+  .flow{display:flex;align-items:center;gap:13px;flex-wrap:wrap;}
+  .pill{display:inline-flex;align-items:center;background:var(--surface-card);color:var(--ink);
+    font-size:15px;font-weight:500;padding:11px 19px;border-radius:9999px;}
+  .pill.coral-fill{background:var(--primary);color:#fff;}
+  .card .pill{background:var(--canvas);}
+  .arrow{color:var(--muted-soft);font-size:18px;}
+  .dark .pill{background:var(--surface-dark-elevated);color:var(--on-dark);}
+  .dark .arrow{color:var(--on-dark-soft);}
+
+  /* two-col before/after */
+  .cols{display:flex;gap:24px;margin-top:30px;}
+  .col{flex:1;border-radius:12px;padding:26px 28px;}
+  .col.before{background:var(--surface-soft);border:1px solid var(--hairline);}
+  .col.after{background:var(--surface-card);border:1px solid var(--hairline);}
+  .card .col.before{background:var(--canvas);} .card .col.after{background:var(--surface-cream-strong);}
+  .col .tag{font-size:12px;font-weight:600;letter-spacing:1.2px;text-transform:uppercase;color:var(--muted);}
+  .col.after .tag{color:var(--primary);}
+  .col ul{list-style:none;margin-top:16px;display:flex;flex-direction:column;gap:11px;}
+  .col li{font-size:15.5px;line-height:1.45;color:var(--body);padding-left:18px;position:relative;}
+  .col li::before{content:"";position:absolute;left:0;top:8px;width:6px;height:6px;border-radius:50%;background:var(--muted-soft);}
+  .col.after li::before{background:var(--primary);}
+
+  /* generic bullet list */
+  .blist{list-style:none;margin-top:26px;display:flex;flex-direction:column;gap:14px;max-width:880px;}
+  .blist li{font-size:17px;line-height:1.5;color:var(--body);padding-left:22px;position:relative;}
+  .blist li::before{content:"";position:absolute;left:0;top:9px;width:7px;height:7px;border-radius:50%;background:var(--primary);}
+  .blist li b{color:var(--body-strong);font-weight:600;}
+  .dark .blist li{color:var(--on-dark);} .dark .blist li::before{background:var(--accent-teal);}
+
+  /* KPI grid */
+  .kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:28px;}
+  .kpi{background:var(--canvas);border:1px solid var(--hairline);border-radius:12px;padding:20px 22px;}
+  .kpi .k{font-size:13px;color:var(--muted);font-weight:500;}
+  .kpi .v{font-family:var(--display);font-size:30px;margin-top:8px;letter-spacing:-.5px;}
+  .kpi .v small{font-size:14px;color:var(--muted-soft);font-family:var(--sans);}
+  .dark .kpi{background:var(--surface-dark-soft);border-color:#2b2926;}
+  .dark .kpi .k{color:var(--on-dark-soft);} .dark .kpi .v{color:var(--on-dark);}
+
+  /* op message box */
+  .opbox{margin-top:18px;background:var(--surface-dark-elevated);border-radius:12px;padding:22px 24px;
+    display:flex;gap:14px;align-items:flex-start;}
+  .opbox .lab{font-size:12px;font-weight:600;letter-spacing:1px;text-transform:uppercase;color:var(--accent-amber);white-space:nowrap;padding-top:3px;}
+  .opbox p{font-size:16px;line-height:1.55;color:var(--on-dark);}
+
+  /* code window */
+  .code-card{background:var(--surface-dark-soft);border:1px solid #2b2926;border-radius:12px;padding:22px;}
+  .code-card .chrome{display:flex;gap:7px;margin-bottom:16px;}
+  .code-card .chrome i{width:11px;height:11px;border-radius:50%;display:block;}
+  .code-card .chrome i:nth-child(1){background:#c64545;}
+  .code-card .chrome i:nth-child(2){background:var(--accent-amber);}
+  .code-card .chrome i:nth-child(3){background:var(--success);}
+  .code-card pre{font-family:var(--mono);font-size:15px;line-height:1.9;color:var(--on-dark);white-space:pre-wrap;}
+  .tk-com{color:var(--on-dark-soft);} .tk-var{color:var(--accent-teal);} .tk-op{color:var(--primary);}
+
+  .grid2{display:flex;gap:34px;margin-top:30px;align-items:flex-start;}
+  .grid2 .left{width:520px;flex:none;} .grid2 .right{flex:1;}
+
+  .sub{font-size:13px;font-weight:600;letter-spacing:1px;text-transform:uppercase;color:var(--primary);margin-bottom:12px;}
+  .dark .sub{color:var(--accent-amber);}
+  .mini{list-style:none;display:flex;flex-direction:column;gap:9px;}
+  .mini li{font-size:15px;line-height:1.4;color:var(--body);padding-left:18px;position:relative;}
+  .mini li::before{content:"";position:absolute;left:0;top:8px;width:6px;height:6px;border-radius:50%;background:var(--accent-teal);}
+  .dark .mini li{color:var(--on-dark);}
+  .note{font-size:13px;color:var(--muted-soft);line-height:1.5;margin-top:10px;}
+  .dark .note{color:var(--on-dark-soft);}
+
+  /* dashboard screenshot crops */
+  .shot{margin-top:auto;border:1px solid var(--hairline);border-radius:12px;height:150px;overflow:hidden;
+    background:var(--surface-soft);box-shadow:0 10px 24px rgba(20,20,19,.08);position:relative;}
+  .shot img{width:100%;height:100%;object-fit:cover;display:block;}
+  .shot .shot-label{position:absolute;left:14px;bottom:10px;background:rgba(20,20,19,.72);color:#fff;
+    font-family:var(--mono);font-size:11px;letter-spacing:.2px;padding:5px 8px;border-radius:999px;}
+  .dark .shot{border-color:#2b2926;background:var(--surface-dark-soft);}
+
+  /* step cards */
+  .steps{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-top:30px;}
+  .step{background:var(--canvas);border:1px solid var(--hairline);border-radius:12px;padding:22px;}
+  .card .step{background:var(--surface-cream-strong);}
+  .step .n{font-family:var(--display);font-size:30px;color:var(--primary);letter-spacing:-1px;}
+  .step .t{font-size:15px;font-weight:600;margin-top:6px;color:var(--ink);}
+  .step .min{font-size:12px;color:var(--muted-soft);font-weight:500;margin-top:2px;}
+  .step ul{list-style:none;margin-top:12px;display:flex;flex-direction:column;gap:7px;}
+  .step li{font-size:13px;line-height:1.4;color:var(--body);padding-left:14px;position:relative;}
+  .step li::before{content:"";position:absolute;left:0;top:7px;width:5px;height:5px;border-radius:50%;background:var(--muted-soft);}
+
+  /* coaching card 4-zone */
+  .zones{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:26px;}
+  .zone{background:var(--surface-dark-soft);border:1px solid #2b2926;border-radius:12px;padding:20px 22px;}
+  .zone .zt{font-size:12px;font-weight:600;letter-spacing:1px;text-transform:uppercase;color:var(--accent-amber);}
+  .zone .zt span{color:var(--on-dark-soft);margin-left:8px;font-weight:400;letter-spacing:0;text-transform:none;}
+  .zone .zb{font-size:14px;line-height:1.55;color:var(--on-dark);margin-top:10px;}
+  .zone .zb b{color:#fff;font-weight:600;}
+
+
+  /* narrative/refinement components */
+  .flow-groups{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-top:34px;}
+  .flow-group{background:var(--surface-dark-soft);border:1px solid #2b2926;border-radius:12px;padding:22px 22px 20px;min-height:178px;}
+  .flow-group .fg-num{font-family:var(--display);font-size:34px;color:var(--accent-amber);letter-spacing:-1px;}
+  .flow-group .fg-title{font-size:17px;font-weight:600;color:var(--on-dark);margin-top:4px;}
+  .flow-group .fg-path{font-size:13px;line-height:1.55;color:var(--on-dark-soft);margin-top:12px;}
+  .flow-group.active{border-color:var(--primary);box-shadow:0 0 0 1px rgba(204,120,92,.35) inset;}
+  .flow-group.active .fg-title{color:#fff;}
+
+  .decision-cards{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:26px;}
+  .decision-card{background:var(--surface-dark-soft);border:1px solid #2b2926;border-radius:12px;padding:18px 18px 16px;}
+  .decision-card .dc-k{font-size:12px;font-weight:600;letter-spacing:1px;text-transform:uppercase;color:var(--accent-amber);}
+  .decision-card .dc-v{font-size:16px;line-height:1.45;color:var(--on-dark);margin-top:8px;}
+  .decision-card .dc-v b{color:#fff;font-weight:600;}
+
+  .caution{margin-top:20px;background:#fff7ed;border:1px solid rgba(204,120,92,.35);border-left:5px solid var(--primary);
+    border-radius:12px;padding:16px 18px;color:var(--body);font-size:15px;line-height:1.55;}
+  .caution b{color:var(--body-strong);font-weight:700;}
+
+  .audit-example{background:var(--surface-dark-soft);border:1px solid #2b2926;border-radius:12px;padding:18px;margin-top:14px;}
+  .audit-example .ae-title{font-size:12px;font-weight:600;letter-spacing:1px;text-transform:uppercase;color:var(--accent-amber);margin-bottom:10px;}
+  .ae-row{display:flex;justify-content:space-between;gap:14px;border-top:1px solid #2b2926;padding:9px 0;font-family:var(--mono);font-size:13px;color:var(--on-dark-soft);}
+  .ae-row:first-of-type{border-top:0;}
+  .ae-row b{color:#fff;font-weight:500;}
+
+  /* coral closing */
+  .coral h1{color:#fff;}
+  .btn-cream{display:inline-flex;align-self:flex-start;margin-top:30px;background:var(--canvas);color:var(--ink);
+    font-weight:600;font-size:15px;padding:13px 24px;border-radius:8px;}
+
+  @media print{
+    @page{size:1280px 720px;margin:0;}
+    html,body{background:#fff;}
+    body{display:block;padding:0;gap:0;}
+    .caption{display:none;}
+    .slide{border-radius:0;box-shadow:none;page-break-after:always;break-after:page;width:1280px;height:720px;}
+    .slide:last-of-type{page-break-after:auto;}
+  }
+</style>
+</head>
+<body>
+
+<!-- 01 OPENING / cream hero -->
+<div class="caption">01 — Opening · cream canvas hero</div>
+<section class="slide cream">
+  <div class="top">
+    <div class="wm"><svg width="20" height="20" viewBox="0 0 24 24"><g fill="#141413"><rect x="11" y="1" width="2" height="22" rx="1"/><rect x="1" y="11" width="22" height="2" rx="1"/><rect x="11" y="1" width="2" height="22" rx="1" transform="rotate(45 12 12)"/><rect x="1" y="11" width="22" height="2" rx="1" transform="rotate(45 12 12)"/></g></svg><span class="name">전북팀 NPS 운영 Dashboard</span></div>
+    <div class="pageno">01 / 15</div>
+  </div>
+  <span class="eyebrow"><span class="dot"></span>OPENING MESSAGE</span>
+  <h1>이 Dashboard는 NPS 점수표가 아니라,<br><span class="accent">현장 Coaching 운영판</span>입니다</h1>
+  <p class="lead">전체 평균이 목표권이어도, 매장별 비판매성 경험은 다르게 흔들릴 수 있습니다. 이 Dashboard는 그 흔들림을 <br>찾아내고, <strong>이번 주 어떤 매장을 어떻게 코칭할지</strong> 정리하기 위해 만들었습니다.</p>
+  <div class="fill"></div>
+  <div class="flow">
+    <span class="pill">점수 확인</span><span class="arrow">→</span>
+    <span class="pill">Risk 발견</span><span class="arrow">→</span>
+    <span class="pill coral-fill">Coaching Action</span>
+  </div>
+</section>
+
+<!-- 02 WHY / cream-card before-after -->
+<div class="caption">02 — Why We Built This · cream card</div>
+<section class="slide card">
+  <div class="top"><div class="wm"><svg width="20" height="20" viewBox="0 0 24 24"><g fill="#141413"><rect x="11" y="1" width="2" height="22" rx="1"/><rect x="1" y="11" width="22" height="2" rx="1"/><rect x="11" y="1" width="2" height="22" rx="1" transform="rotate(45 12 12)"/><rect x="1" y="11" width="22" height="2" rx="1" transform="rotate(45 12 12)"/></g></svg><span class="name">전북팀 NPS 운영 Dashboard</span></div><div class="pageno">02 / 15</div></div>
+  <span class="eyebrow"><span class="dot"></span>WHY WE BUILT THIS</span>
+  <h2>평균 NPS만 보면<br>현장의 문제 지점이 보이지 않습니다</h2>
+  <p class="lead">평균 점수는 방향을 보여주지만, <strong>action list를 만들어주지는 않습니다.</strong> 현장 개선은 평균이 아니라 매장별 Risk와 VOC 근거에서 시작됩니다.</p>
+  <div class="cols">
+    <div class="col before"><div class="tag">Before</div><ul>
+      <li>종합 NPS 한 줄 확인으로 끝</li>
+      <li>좋은 평균 뒤 매장별 편차를 놓침</li>
+      <li>중립/비추천은 그냥 숫자로 남음</li>
+    </ul></div>
+    <div class="col after"><div class="tag">After — 이 Dashboard</div><ul>
+      <li>판매성 / 비판매성 NPS 분리 확인</li>
+      <li>비판매성 Risk → 매장 → VOC → Coaching</li>
+      <li>중립/비추천을 코칭 출발점으로 전환</li>
+    </ul></div>
+  </div>
+</section>
+
+<!-- 03 READING FLOW / dark -->
+<div class="caption">03 — Dashboard Reading Flow · dark</div>
+<section class="slide dark">
+  <div class="top"><div class="wm"><svg width="20" height="20" viewBox="0 0 24 24"><g fill="#faf9f5"><rect x="11" y="1" width="2" height="22" rx="1"/><rect x="1" y="11" width="22" height="2" rx="1"/><rect x="11" y="1" width="2" height="22" rx="1" transform="rotate(45 12 12)"/><rect x="1" y="11" width="22" height="2" rx="1" transform="rotate(45 12 12)"/></g></svg><span class="name">전북팀 NPS 운영 Dashboard</span></div><div class="pageno">03 / 15</div></div>
+  <span class="badge">Reading Flow</span>
+  <h2>화면은 “관찰 → 해석 → 액션 → 확인”<br>순서로 읽습니다</h2>
+  <p class="lead">화면은 길지만, 읽는 구조는 단순합니다. <em>판단 → 우선순위 발견 → 실행/검산</em> 세 단계로 보면 됩니다.</p>
+  <div class="flow-groups">
+    <div class="flow-group"><div class="fg-num">01</div><div class="fg-title">판단</div><div class="fg-path">Operating Message → 이번 주 NPS 판세<br>오늘 취약축과 확인할 Risk를 먼저 잡습니다.</div></div>
+    <div class="flow-group"><div class="fg-num">02</div><div class="fg-title">우선순위 발견</div><div class="fg-path">Risk Map → 반복 Hot Spot<br>먼저 볼 매장과 반복성을 함께 확인합니다.</div></div>
+    <div class="flow-group active"><div class="fg-num">03</div><div class="fg-title">실행 / 검산</div><div class="fg-path">Coaching Card → Drill-down/T크루 → Action Sheet → Audit<br>코칭하고, 공유하고, 데이터 신뢰도를 확인합니다.</div></div>
+  </div>
+  <div class="fill"></div>
+  <p class="note">관찰·해석·액션·확인을 한 번에 담되, 실제 사용자는 세 덩어리로만 기억하면 됩니다.</p>
+</section>
+
+<!-- 04 TOP SUMMARY / cream KPIs + op message -->
+<div class="caption">04 — Top Summary · cream + dark op-message</div>
+<section class="slide cream">
+  <div class="top"><div class="wm"><svg width="20" height="20" viewBox="0 0 24 24"><g fill="#141413"><rect x="11" y="1" width="2" height="22" rx="1"/><rect x="1" y="11" width="22" height="2" rx="1"/><rect x="11" y="1" width="2" height="22" rx="1" transform="rotate(45 12 12)"/><rect x="1" y="11" width="22" height="2" rx="1" transform="rotate(45 12 12)"/></g></svg><span class="name">전북팀 NPS 운영 Dashboard</span></div><div class="pageno">04 / 15</div></div>
+  <span class="eyebrow"><span class="dot"></span>TOP SUMMARY</span>
+  <h2>첫 화면에서 오늘의 판단을 먼저 봅니다</h2>
+  <p class="lead">입구는 KPI가 아니라 <strong>오늘의 Operating Message</strong>입니다. “오늘 괜찮은가?”가 아니라 “오늘 어디를 먼저 봐야 하는가?”를 판단합니다.</p>
+  <div class="kpis">
+    <div class="kpi"><div class="k">종합 NPS</div><div class="v">목표권 <small>유지</small></div></div>
+    <div class="kpi"><div class="k">판매성 / 비판매성 NPS</div><div class="v">분리 <small>표시</small></div></div>
+    <div class="kpi"><div class="k">월누적 위험매장</div><div class="v accent">N개</div></div>
+  </div>
+  <div class="opbox" style="margin-top:auto;">
+    <div class="lab">Operating<br>Message</div>
+    <p>종합 NPS는 목표권 흐름을 유지하고 있지만, 비판매성 축 기준 월누적 위험매장이 있어 <b style="color:var(--accent-amber)">Care Priority 상위 매장부터 VOC와 업무유형을 확인</b>해야 합니다.</p>
+  </div>
+</section>
+
+<!-- 05 WEEKLY FLOW / cream-card -->
+<div class="caption">05 — Weekly NPS Flow · cream card</div>
+<section class="slide card">
+  <div class="top"><div class="wm"><svg width="20" height="20" viewBox="0 0 24 24"><g fill="#141413"><rect x="11" y="1" width="2" height="22" rx="1"/><rect x="1" y="11" width="22" height="2" rx="1"/><rect x="11" y="1" width="2" height="22" rx="1" transform="rotate(45 12 12)"/><rect x="1" y="11" width="22" height="2" rx="1" transform="rotate(45 12 12)"/></g></svg><span class="name">전북팀 NPS 운영 Dashboard</span></div><div class="pageno">05 / 15</div></div>
+  <span class="eyebrow"><span class="dot"></span>WEEKLY NPS FLOW</span>
+  <h2>이번 주 판세는 “오늘 취약축”을<br>찾기 위한 화면입니다</h2>
+  <p class="lead">Trend는 과거 흐름을 보는 차트가 아니라, <strong>오늘의 대응 우선순위를 정하는 입구</strong>입니다.</p>
+  <ul class="blist">
+    <li>이번 주 종합 NPS가 <b>목표권</b>인지</li>
+    <li>오늘 취약축이 <b>판매성인지 비판매성인지</b></li>
+    <li>오늘 중립/비추천이 몇 건인지, 그리고 <b>오늘 실행 메시지</b>가 무엇인지</li>
+  </ul>
+  <div class="shot"><img src="ppt_assets/screenshots/weekly_trend.png" alt="Weekly Trend chart and today action message"><span class="shot-label">Weekly Trend · 오늘 실행</span></div>
+</section>
+
+<!-- 06 RISK MAP / cream-card -->
+<div class="caption">06 — Risk Map · cream card</div>
+<section class="slide cream">
+  <div class="top"><div class="wm"><svg width="20" height="20" viewBox="0 0 24 24"><g fill="#141413"><rect x="11" y="1" width="2" height="22" rx="1"/><rect x="1" y="11" width="22" height="2" rx="1"/><rect x="11" y="1" width="2" height="22" rx="1" transform="rotate(45 12 12)"/><rect x="1" y="11" width="22" height="2" rx="1" transform="rotate(45 12 12)"/></g></svg><span class="name">전북팀 NPS 운영 Dashboard</span></div><div class="pageno">06 / 15</div></div>
+  <span class="eyebrow"><span class="dot"></span>RISK MAP</span>
+  <h2>비판매성 케어 우선순위는<br>Risk Map에서 찾습니다</h2>
+  <p class="lead">전체 평균이 아니라, <strong>“비판매성 응답이 쌓였는데 NPS가 낮은 매장”</strong>이 이번 주 우선 케어 대상입니다.</p>
+  <div class="grid2">
+    <div class="left"><div class="sub">차트 읽는 법</div><ul class="mini">
+      <li>X축 — 비판매성 응답 수</li>
+      <li>Y축 — 비판매성 NPS</li>
+      <li>Bubble — 전체 응답건수</li>
+      <li>Color — Care 유형</li>
+      <li>우측 하단 = 먼저 확인할 후보</li>
+    </ul></div>
+    <div class="right"><div class="sub">Care 유형</div>
+      <div class="flow" style="margin-top:0;">
+        <span class="pill">즉시 개선형</span><span class="pill">비판매성 취약형</span><span class="pill">구조 개선형</span>
+        <span class="pill">판매성 취약형</span><span class="pill coral-fill">우수 확산형</span>
+      </div>
+    </div>
+  </div>
+  <div class="shot"><img src="ppt_assets/screenshots/risk_map.png" alt="Risk Map and Care Priority view"><span class="shot-label">Risk Map · Care Priority</span></div>
+</section>
+
+<!-- 07 CARE PRIORITY / dark code -->
+<div class="caption">07 — Care Priority · dark code-window</div>
+<section class="slide dark">
+  <div class="top"><div class="wm"><svg width="20" height="20" viewBox="0 0 24 24"><g fill="#faf9f5"><rect x="11" y="1" width="2" height="22" rx="1"/><rect x="1" y="11" width="22" height="2" rx="1"/><rect x="11" y="1" width="2" height="22" rx="1" transform="rotate(45 12 12)"/><rect x="1" y="11" width="22" height="2" rx="1" transform="rotate(45 12 12)"/></g></svg><span class="name">전북팀 NPS 운영 Dashboard</span></div><div class="pageno">07 / 15</div></div>
+  <span class="badge">Care Priority</span>
+  <h2>단순 Risk 건수가 아니라,<br>실행 우선순위를 봅니다</h2>
+  <p class="lead">Care Priority는 “문제가 큰 매장”을 찾는 점수가 아니라, <em>이번 주 먼저 코칭해야 할 매장</em>을 찾는 운영 점수입니다.</p>
+  <div class="decision-cards">
+    <div class="decision-card"><div class="dc-k">Risk 절대량</div><div class="dc-v"><b>비추천·중립</b>이 얼마나 발생했는가</div></div>
+    <div class="decision-card"><div class="dc-k">목표 Gap</div><div class="dc-v">목표까지 <b>얼마나 부족한가</b></div></div>
+    <div class="decision-card"><div class="dc-k">Sample Confidence</div><div class="dc-v">표본이 충분한가, <b>소표본 착시는 아닌가</b></div></div>
+  </div>
+  <div class="code-card" style="margin-top:24px;"><div class="chrome"><i></i><i></i><i></i></div>
+<pre><span class="tk-com"># 단순 Risk Top이 아니라 실행 우선순위</span>
+<span class="tk-var">Care_Priority</span> <span class="tk-op">=</span> Base_Risk_Score <span class="tk-op">×</span> Sample_Confidence</pre></div>
+  <p class="note">n이 작으면 확인은 하되, 과잉 일반화하지 않습니다. 그래서 “많이 나쁜 곳”보다 “이번 주 먼저 코칭할 곳”을 찾습니다.</p>
+</section>
+
+<!-- 08 HOT SPOT / cream -->
+<div class="caption">08 — Repeated Risk (Hot Spot) · cream</div>
+<section class="slide cream">
+  <div class="top"><div class="wm"><svg width="20" height="20" viewBox="0 0 24 24"><g fill="#141413"><rect x="11" y="1" width="2" height="22" rx="1"/><rect x="1" y="11" width="22" height="2" rx="1"/><rect x="11" y="1" width="2" height="22" rx="1" transform="rotate(45 12 12)"/><rect x="1" y="11" width="22" height="2" rx="1" transform="rotate(45 12 12)"/></g></svg><span class="name">전북팀 NPS 운영 Dashboard</span></div><div class="pageno">08 / 15</div></div>
+  <span class="eyebrow"><span class="dot"></span>REPEATED RISK · HOT SPOT</span>
+  <h2>Hot Spot은 “한 번 튄 건지,<br>반복되는 건지”를 확인합니다</h2>
+  <p class="lead">Hot Spot은 더 많은 차트가 아니라, Risk Map에서 찾은 매장이 <strong>반복적으로 흔들리는지 확인하는 <span style="white-space:nowrap;">검증 장치입니다.</span></strong></p>
+  <ul class="blist">
+    <li>날짜 × 매장 <b>heatmap</b> — 중립/비추천 <b>2일 이상 반복</b> 매장만 표시</li>
+    <li>매장명 옆 <b>(N일)</b> = risk 발생일 수</li>
+    <li><b>굵은 기울임 매장</b> = Care Priority Top 20과도 겹치는 공통 action 후보</li>
+  </ul>
+  <div class="shot"><img src="ppt_assets/screenshots/hot_spot_heatmap.png" alt="Hot Spot heatmap for repeated risk"><span class="shot-label">Hot Spot · 반복 Risk</span></div>
+</section>
+
+<!-- 09 COACHING CARD / dark 4-zone -->
+<div class="caption">09 — Coaching Card · dark product mockup (4-zone)</div>
+<section class="slide dark">
+  <div class="top"><div class="wm"><svg width="20" height="20" viewBox="0 0 24 24"><g fill="#faf9f5"><rect x="11" y="1" width="2" height="22" rx="1"/><rect x="1" y="11" width="22" height="2" rx="1"/><rect x="11" y="1" width="2" height="22" rx="1" transform="rotate(45 12 12)"/><rect x="1" y="11" width="22" height="2" rx="1" transform="rotate(45 12 12)"/></g></svg><span class="name">전북팀 NPS 운영 Dashboard</span></div><div class="pageno">09 / 15</div></div>
+  <span class="badge">Coaching Card</span>
+  <h2>Dashboard의 landing point는<br>매장별 Coaching Card입니다</h2>
+  <p class="lead">매장별 상태 → VOC 근거 → 이번 주 액션 → 다음 확인 지표 순서로 읽는 <em>최종 실행 단위</em>입니다.</p>
+  <div class="zones">
+    <div class="zone"><div class="zt">1 · 식별</div><div class="zb">매장명 · 대리점 · 담당 · 진단 유형 · <b>Care Priority rank</b></div></div>
+    <div class="zone"><div class="zt">2 · 상태</div><div class="zb">종합 NPS · 최근 7일/오늘 비판매성 NPS · <b>응답 / 추천 / 중립 / 비추천</b></div></div>
+    <div class="zone"><div class="zt">3 · 우선 케어 이유</div><div class="zb">주요 Risk 업무 · <b>대표 VOC</b></div></div>
+    <div class="zone"><div class="zt">4 · 이번 주 액션</div><div class="zb">코칭 checklist · 정량 목표 · <b>다음 확인 지표</b></div></div>
+  </div>
+</section>
+
+<!-- 10 DRILL-DOWN & T크루 / cream-card -->
+<div class="caption">10 — Drill-down & T크루 · cream card</div>
+<section class="slide card">
+  <div class="top"><div class="wm"><svg width="20" height="20" viewBox="0 0 24 24"><g fill="#141413"><rect x="11" y="1" width="2" height="22" rx="1"/><rect x="1" y="11" width="22" height="2" rx="1"/><rect x="11" y="1" width="2" height="22" rx="1" transform="rotate(45 12 12)"/><rect x="1" y="11" width="22" height="2" rx="1" transform="rotate(45 12 12)"/></g></svg><span class="name">전북팀 NPS 운영 Dashboard</span></div><div class="pageno">10 / 15</div></div>
+  <span class="eyebrow"><span class="dot"></span>DRILL-DOWN & T크루</span>
+  <h2>매장 문제를 업무유형과<br>사람 단위 코칭 후보로 좁힙니다</h2>
+  <p class="lead">Drill-down은 <strong>Action Card의 근거 확인</strong>이고, T크루 후보는 매장 코칭을 <strong>사람 단위로 좁히는 화면</strong>입니다.</p>
+  <div class="cols">
+    <div class="col before"><div class="tag">비판매성 Drill-down</div><ul>
+      <li>집중관리 매장 · 업무유형 Top</li>
+      <li>매장별 추이</li>
+      <li>판매성 양호 · 비판매성 취약 매장</li>
+    </ul></div>
+    <div class="col after"><div class="tag">T크루 Coaching 후보</div><ul>
+      <li>개인 평가가 아니라 코칭 후보 탐색</li>
+      <li>n≥5 기준 · 중립/비추천 · 목표 Gap</li>
+      <li>매장 코칭 시 확인 대상을 좁힘</li>
+    </ul></div>
+  </div>
+  <div class="caution"><b>주의:</b> T크루 화면은 개인 평가표가 아닙니다. n≥5 기준에서 매장 코칭 시 확인할 후보를 좁히는 <b>보조 화면</b>입니다.</div>
+</section>
+
+<!-- 11 ACTION SHEET / cream -->
+<div class="caption">11 — Action Sheet · cream</div>
+<section class="slide cream">
+  <div class="top"><div class="wm"><svg width="20" height="20" viewBox="0 0 24 24"><g fill="#141413"><rect x="11" y="1" width="2" height="22" rx="1"/><rect x="1" y="11" width="22" height="2" rx="1"/><rect x="11" y="1" width="2" height="22" rx="1" transform="rotate(45 12 12)"/><rect x="1" y="11" width="22" height="2" rx="1" transform="rotate(45 12 12)"/></g></svg><span class="name">전북팀 NPS 운영 Dashboard</span></div><div class="pageno">11 / 15</div></div>
+  <span class="eyebrow"><span class="dot"></span>ACTION SHEET</span>
+  <h2>공유와 실행 관리는<br>Action Sheet로 합니다</h2>
+  <p class="lead">Coaching Card가 판단용이라면, Action Sheet는 <strong>공유와 실행 관리용</strong>입니다. dashboard에서 나온 판단을 <br>현장 공유용 action list로 바꿉니다.</p>
+  <ul class="blist">
+    <li>대리점별 필터 · <b>Top 10만 보기</b> · CSV 다운로드</li>
+    <li>매장별 주요 Risk 업무 · 대표 VOC · 이번 주 액션 확인</li>
+    <li><b>회의 전 공유 자료</b>로 바로 활용 가능</li>
+  </ul>
+  <div class="shot"><img src="ppt_assets/screenshots/action_sheet.png" alt="Action Sheet table and CSV download buttons"><span class="shot-label">Action Sheet · CSV 다운로드</span></div>
+</section>
+
+<!-- 12 AUDIT / dark -->
+<div class="caption">12 — Audit Layer · dark</div>
+<section class="slide dark">
+  <div class="top"><div class="wm"><svg width="20" height="20" viewBox="0 0 24 24"><g fill="#faf9f5"><rect x="11" y="1" width="2" height="22" rx="1"/><rect x="1" y="11" width="22" height="2" rx="1"/><rect x="11" y="1" width="2" height="22" rx="1" transform="rotate(45 12 12)"/><rect x="1" y="11" width="22" height="2" rx="1" transform="rotate(45 12 12)"/></g></svg><span class="name">전북팀 NPS 운영 Dashboard</span></div><div class="pageno">12 / 15</div></div>
+  <span class="badge">Audit Layer</span>
+  <h2>Audit은 판단 기준이 아니라,<br>데이터 신뢰도 검산입니다</h2>
+  <p class="lead">Audit은 “누구를 코칭할까”를 정하는 화면이 아니라, <em>“이 판단이 데이터상 설명 가능한가”</em>를 <span style="white-space:nowrap;">확인하는 화면입니다.</span></p>
+  <div class="grid2" style="margin-top:24px;">
+    <div class="left">
+      <div class="code-card"><div class="chrome"><i></i><i></i><i></i></div>
+<pre><span class="tk-com"># 운영 판단 기준</span>
+<span class="tk-var">Source_NPS</span>   <span class="tk-com"># 원천 Excel 값</span>
+<span class="tk-var">Recalc_NPS</span>  <span class="tk-op">←</span> count 기반 재계산 <span class="tk-com">(판단 기준)</span></pre></div>
+      <div class="audit-example"><div class="ae-title">예: 순창 본점</div>
+        <div class="ae-row"><span>판매성 Source</span><b>-100</b><span>Recalc</span><b>100</b></div>
+        <div class="ae-row"><span>비판매성 Source</span><b>33.3</b><span>Recalc</span><b>-100</b></div>
+        <div class="ae-row"><span>해석</span><b>판매성보다 비판매성 VOC 확인</b></div>
+      </div>
+    </div>
+    <div class="right">
+      <div class="sub">Audit에서 보는 것</div>
+      <ul class="mini">
+        <li>원천 Excel NPS와 count 재계산 NPS가 크게 다른 매장</li>
+        <li>소표본 때문에 과잉 해석하면 안 되는 매장</li>
+        <li>필요 시 VOC 원문과 업무유형으로 재확인할 근거</li>
+      </ul>
+      <p class="note">Audit은 우선순위를 바꾸는 화면이 아닙니다. 앞의 판단이 데이터상 설명 가능한지 확인하는 검산 layer입니다.</p>
+    </div>
+  </div>
+</section>
+
+<!-- 13 WEEKLY OPERATION / cream 4 steps -->
+<div class="caption">13 — Weekly Operation · cream (4 steps)</div>
+<section class="slide cream">
+  <div class="top"><div class="wm"><svg width="20" height="20" viewBox="0 0 24 24"><g fill="#141413"><rect x="11" y="1" width="2" height="22" rx="1"/><rect x="1" y="11" width="22" height="2" rx="1"/><rect x="11" y="1" width="2" height="22" rx="1" transform="rotate(45 12 12)"/><rect x="1" y="11" width="22" height="2" rx="1" transform="rotate(45 12 12)"/></g></svg><span class="name">전북팀 NPS 운영 Dashboard</span></div><div class="pageno">13 / 15</div></div>
+  <span class="eyebrow"><span class="dot"></span>WEEKLY OPERATION</span>
+  <h2>매주 운영은 5분 review →<br>15분 coaching 준비로 충분합니다</h2>
+  <div class="steps">
+    <div class="step"><div class="n">1</div><div class="t">오늘 상태 확인</div><div class="min">5분</div><ul><li>Operating Message</li><li>오늘 취약축</li><li>중립/비추천 건수</li></ul></div>
+    <div class="step"><div class="n">2</div><div class="t">우선 매장 확인</div><div class="min">5분</div><ul><li>Risk Map</li><li>Care Priority Top</li><li>반복 Hot Spot 겹침</li></ul></div>
+    <div class="step"><div class="n">3</div><div class="t">Coaching Card</div><div class="min">10분</div><ul><li>상위 매장 Action Card</li><li>대표 VOC</li><li>이번 주 액션 문구</li></ul></div>
+    <div class="step"><div class="n">4</div><div class="t">공유 / 점검</div><div class="min">5분</div><ul><li>Action Sheet 다운로드</li><li>대리점별 공유</li><li>다음 확인 지표 설정</li></ul></div>
+  </div>
+  <p class="lead" style="margin-top:auto;">Dashboard를 오래 보는 것이 목적이 아닙니다. <strong>짧게 보고, 정확히 코칭하고, 다음 지표로 확인</strong>하는 것이 <span style="white-space:nowrap;">목적입니다.</span></p>
+</section>
+
+<!-- 14 WHAT CHANGES / cream-card before-after -->
+<div class="caption">14 — What Changes for the Team · cream card</div>
+<section class="slide card">
+  <div class="top"><div class="wm"><svg width="20" height="20" viewBox="0 0 24 24"><g fill="#141413"><rect x="11" y="1" width="2" height="22" rx="1"/><rect x="1" y="11" width="22" height="2" rx="1"/><rect x="11" y="1" width="2" height="22" rx="1" transform="rotate(45 12 12)"/><rect x="1" y="11" width="22" height="2" rx="1" transform="rotate(45 12 12)"/></g></svg><span class="name">전북팀 NPS 운영 Dashboard</span></div><div class="pageno">14 / 15</div></div>
+  <span class="eyebrow"><span class="dot"></span>WHAT CHANGES</span>
+  <h2>팀 운영은 감이 아니라<br>evidence-based coaching으로 바뀝니다</h2>
+  <div class="cols">
+    <div class="col before"><div class="tag">Before</div><ul>
+      <li>종합 NPS 중심 확인</li>
+      <li>문제가 생긴 뒤 사후 확인</li>
+      <li>코칭 대상이 경험과 감에 의존</li>
+      <li>VOC 원문과 action이 분리됨</li>
+    </ul></div>
+    <div class="col after"><div class="tag">After</div><ul>
+      <li>판매성/비판매성 분리 · 조기 발견</li>
+      <li>Care Priority 기반 대상 선정</li>
+      <li>VOC 근거와 action이 한 화면에 연결</li>
+      <li>Action Sheet로 공유/점검 가능</li>
+    </ul></div>
+  </div>
+  <p class="lead" style="margin-top:18px;">이제 NPS는 결과 점수가 아니라, <strong>현장 코칭을 설계하는 입력값</strong>이 됩니다.</p>
+</section>
+
+<!-- 15 CLOSING / coral callout -->
+<div class="caption">15 — Closing · coral callout</div>
+<section class="slide coral">
+  <div class="top"><div class="wm"><svg width="20" height="20" viewBox="0 0 24 24"><g fill="#ffffff"><rect x="11" y="1" width="2" height="22" rx="1"/><rect x="1" y="11" width="22" height="2" rx="1"/><rect x="11" y="1" width="2" height="22" rx="1" transform="rotate(45 12 12)"/><rect x="1" y="11" width="22" height="2" rx="1" transform="rotate(45 12 12)"/></g></svg><span class="name">전북팀 NPS 운영 Dashboard</span></div><div class="pageno">15 / 15</div></div>
+  <div class="fill"></div>
+  <span class="badge" style="background:rgba(255,255,255,.16);color:#fff;">Closing</span>
+  <h1 style="font-size:50px;">NPS를 보는 목적은 점수 해석이 아니라,<br>다음 action 결정입니다</h1>
+  <p class="lead">이 Dashboard는 좋은 점수를 보여주기 위한 화면이 아닙니다. 어디에서 고객 경험이 흔들리는지 찾고, 이번 주 어떤 코칭을 할지 결정하기 위한 <strong style="color:#fff;">전북팀 운영판</strong>입니다.</p>
+  <div class="fill"></div>
+</section>
+
+</body>
+</html>
