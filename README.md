@@ -26,26 +26,26 @@ scripts/            # 실행 스크립트
 
 ## 파일 업로드 위치
 
-6월 파일은 우선 아래 경로에 넣으면 됩니다.
+6월 파일은 우선 아래 경로에 넣으면 됩니다. 프로젝트 루트 기준 상대경로를 사용하므로, 집 Desktop과 회사 노트북의 홈 디렉터리명이 달라도 동일한 폴더명으로 복사하면 동작합니다.
 
 ```text
-/home/brian/workplace/nps-ops-dashboard/data/raw/2026-06/
+data/raw/2026-06/
 ```
 
-예시:
+현재 회사 노트북 WSL 경로 예시:
 
 ```text
-/home/brian/workplace/nps-ops-dashboard/data/raw/2026-06/●26년06월 NPS평가 통계_0622.xlsx
+/home/mysktelecom/workplace/nps-ops-dashboard/data/raw/2026-06/●26년06월 NPS평가 통계_0622.xlsx
 ```
 
 ## 실행 방법
 
-Brian의 WSL 기본 shell에는 `python` 명령이 없을 수 있으므로, 프로젝트 전용 `.venv`를 사용합니다.
+Brian의 WSL 기본 shell에는 `python` 명령이 없을 수 있으므로, 프로젝트 전용 `.venv`를 사용합니다. USB/다른 PC에서 폴더를 복사한 경우 `.venv` 내부 실행 권한과 Python 경로가 깨질 수 있으니 최초 1회 `scripts/setup_env.sh`로 회사 노트북 환경에 맞게 다시 생성합니다.
 
-최초 1회:
+최초 1회 또는 PC 간 복사 직후:
 
 ```bash
-cd /home/brian/workplace/nps-ops-dashboard
+cd /home/mysktelecom/workplace/nps-ops-dashboard
 bash scripts/setup_env.sh
 ```
 
@@ -64,10 +64,10 @@ bash scripts/run_dashboard.sh
 직접 실행하려면 아래처럼 `.venv`의 Python을 사용합니다.
 
 ```bash
-cd /home/brian/workplace/nps-ops-dashboard
+cd /home/mysktelecom/workplace/nps-ops-dashboard
 . .venv/bin/activate
 python scripts/build_data.py
-python -m streamlit run app.py --server.headless true --server.port 8502
+python -m streamlit run app.py --server.headless true --server.port 8502 --server.address 127.0.0.1
 ```
 
 브라우저 주소:

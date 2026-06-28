@@ -1,6 +1,7 @@
 pandas
 openpyxl
 pyarrow
-streamlit
+streamlit<1.58
 plotly
 tabulate
+pytest

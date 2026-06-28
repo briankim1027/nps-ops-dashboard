@@ -9,6 +9,7 @@ __pycache__/
 
 # Local agent/session caches
 .omc/
+.claude/
 .hermes_claude*_prompt.md
 
 # Office/Windows sidecar files - company data stays local unless explicitly approved

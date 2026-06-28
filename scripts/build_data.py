@@ -67,25 +67,43 @@ def load_store_mapping(path: Path = MAPPING_FILE) -> pd.DataFrame:
     return mapping
 
 
-def apply_store_mapping(df: pd.DataFrame, mapping: pd.DataFrame) -> pd.DataFrame:
+def apply_store_mapping(df: pd.DataFrame, mapping: pd.DataFrame, target_team: str | None = None, table_name: str = "table") -> pd.DataFrame:
     """Correct team/agency/store labels using Brian's store master mapping.
 
     The live `응답_비추천` sheet contains a lookup block whose rows do not align with
     the VOC rows, so agency/store fields from that block must not be trusted. The
     store code is reliable; use it to rehydrate team-agency-store labels.
+
+    The raw workbook can contain teams outside Brian's operating scope while the
+    mapping master is intentionally Jeonbuk-only. Log total raw unmatched rows and
+    target-team unmatched rows separately so normal outside-team rows do not look
+    like a Jeonbuk dashboard data-quality failure.
     """
     if df.empty or mapping.empty or "store_code" not in df.columns:
         return df
     out = df.copy()
+    if "team_name" in out.columns:
+        original_team = out["team_name"].astype(str).str.strip()
+    else:
+        original_team = pd.Series([pd.NA] * len(out), index=out.index).astype(str).str.strip()
     out["store_code_norm"] = _norm_code(out["store_code"])
     out = out.merge(mapping, on="store_code_norm", how="left")
     unmatched = out["map_store_name"].isna() & out["store_code"].notna()
     unmatched_rate = float(unmatched.mean()) if len(out) else 0.0
-    if unmatched_rate > MAPPING_UNMATCHED_WARN_RATE:
+    target_mask = original_team.eq(target_team) if target_team else pd.Series([False] * len(out), index=out.index)
+    target_unmatched = unmatched & target_mask
+    target_total = int(target_mask.sum()) if target_team else 0
+    target_rate = float(target_unmatched.sum() / target_total) if target_total else 0.0
+    if unmatched_rate > MAPPING_UNMATCHED_WARN_RATE or (target_team and target_unmatched.any()):
         sample_codes = out.loc[unmatched, "store_code"].astype(str).drop_duplicates().head(10).tolist()
+        outside_team_counts = original_team[unmatched & ~target_mask].value_counts(dropna=False).head(10).to_dict()
+        level = "WARNING" if target_team and target_unmatched.any() else "INFO"
         print(
-            f"WARNING mapping_unmatched_rate={unmatched_rate:.2%} "
-            f"rows={int(unmatched.sum())}/{len(out)} sample_store_codes={sample_codes}"
+            f"{level} mapping_unmatched_rate table={table_name} total={unmatched_rate:.2%} "
+            f"rows={int(unmatched.sum())}/{len(out)} "
+            f"target_team={target_team or 'N/A'} target_rows={int(target_unmatched.sum())}/{target_total} "
+            f"target_rate={target_rate:.2%} outside_team_counts={outside_team_counts} "
+            f"sample_store_codes={sample_codes}"
         )
     for src, dst in [
         ("map_team_name", "team_name"),
@@ -173,8 +191,8 @@ def build(path: Path, team: str = DEFAULT_TEAM, target_score: float = DEFAULT_TA
     mapping = load_store_mapping()
     if not mapping.empty:
         # Apply to VOC and response-level tables where a reliable store code exists.
-        parsed["negative_feedback"] = apply_store_mapping(parsed["negative_feedback"], mapping)
-        parsed["response_fact"] = apply_store_mapping(parsed["response_fact"], mapping)
+        parsed["negative_feedback"] = apply_store_mapping(parsed["negative_feedback"], mapping, target_team=team, table_name="negative_feedback")
+        parsed["response_fact"] = apply_store_mapping(parsed["response_fact"], mapping, target_team=team, table_name="response_fact")
 
     # Main derived tables
     team_summary = summarize_team_from_response(parsed["response_fact"], team=team)
