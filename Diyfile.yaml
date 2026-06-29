@@ -1,5 +1,5 @@
 name: nps-ops-dashboard
-entrypoint: streamlit run app.py --server.port $PORT
+entrypoint: streamlit run app.py --server.headless true --server.address 0.0.0.0 --server.port $PORT --server.baseUrlPath nps-ops-dashboard
 description: |
   nps-ops-dashboard
 service_type: python-streamlit
