@@ -1,0 +1,14 @@
+name: nps-ops-dashboard
+entrypoint: streamlit run app.py --server.port $PORT
+description: |
+  nps-ops-dashboard
+service_type: python-streamlit
+properties:
+- revision: master
+  ingress:
+    path: /nps-ops-dashboard
+  image:
+    # dockerfile 얍 유형으로 이미지를 만든 경우에는 아래 처럼 설정을 하면 해당 이미지를 기반으로 빌드를 한다.
+    # from: '/example:1.0'
+    # 외부에 오픈된 이미지를 가져와서 빌드를 한다.
+    from: 'public.ecr.aws/docker/library/python:3.9-slim'
