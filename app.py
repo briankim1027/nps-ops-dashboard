@@ -341,32 +341,70 @@ nps_time_intelligence_files = sorted(PROCESSED_DIR.glob(f"nps_time_intelligence_
 store_daily_heatmap_files = sorted(PROCESSED_DIR.glob(f"store_daily_heatmap_{team}_*.parquet"), reverse=True)
 weekday_time_hotspots_files = sorted(PROCESSED_DIR.glob(f"weekday_time_hotspots_{team}_*.parquet"), reverse=True)
 
-if not priority_files:
+available_dates = []
+for p in priority_files:
+    stem = p.stem
+    parts = stem.split("_")
+    if len(parts) >= 3:
+        date_str = parts[-1]
+        if len(date_str) == 8 and date_str.isdigit():
+            available_dates.append(date_str)
+
+available_dates = sorted(list(set(available_dates)), reverse=True)
+
+if not available_dates:
     st.warning("처리된 데이터가 없습니다. 먼저 `bash scripts/run_build.sh`를 실행하세요.")
     st.stop()
 
-priority = pd.read_parquet(priority_files[0])
-response = pd.read_parquet(response_files[0]) if response_files else pd.DataFrame()
-negative = pd.read_parquet(negative_files[0]) if negative_files else pd.DataFrame()
-crew = pd.read_parquet(crew_files[0]) if crew_files else pd.DataFrame()
+formatted_dates = [f"{d[:4]}-{d[4:6]}-{d[6:]}" for d in available_dates]
+selected_date_fmt = st.sidebar.selectbox("기준일 선택", formatted_dates, index=0)
+selected_date = selected_date_fmt.replace("-", "")
+
+def get_file_for_date(files_list, date_str):
+    for f in files_list:
+        if f.name.endswith(f"_{date_str}.parquet") or f.name.endswith(f"_{team}_{date_str}.parquet"):
+            return f
+    return files_list[0] if files_list else None
+
+priority_file = get_file_for_date(priority_files, selected_date)
+response_file = get_file_for_date(response_files, selected_date)
+negative_file = get_file_for_date(negative_files, selected_date)
+store_file = get_file_for_date(store_files, selected_date)
+crew_file = get_file_for_date(crew_files, selected_date)
+non_sales_file = get_file_for_date(non_sales_files, selected_date)
+action_sheet_file = get_file_for_date(action_sheet_files, selected_date)
+non_sales_type_file = get_file_for_date(non_sales_type_files, selected_date)
+non_sales_trend_file = get_file_for_date(non_sales_trend_files, selected_date)
+sales_good_ns_weak_file = get_file_for_date(sales_good_ns_weak_files, selected_date)
+nps_diff_file = get_file_for_date(nps_diff_files, selected_date)
+sample_warning_file = get_file_for_date(sample_warning_files, selected_date)
+daily_nps_trend_file = get_file_for_date(daily_nps_trend_files, selected_date)
+nps_time_intelligence_file = get_file_for_date(nps_time_intelligence_files, selected_date)
+store_daily_heatmap_file = get_file_for_date(store_daily_heatmap_files, selected_date)
+weekday_time_hotspots_file = get_file_for_date(weekday_time_hotspots_files, selected_date)
+
+priority = pd.read_parquet(priority_file) if priority_file else pd.DataFrame()
+response = pd.read_parquet(response_file) if response_file else pd.DataFrame()
+negative = pd.read_parquet(negative_file) if negative_file else pd.DataFrame()
+crew = pd.read_parquet(crew_file) if crew_file else pd.DataFrame()
 negative = add_voc_classification(negative) if not negative.empty and "voc_category" not in negative.columns else negative
-non_sales_drilldown = pd.read_parquet(non_sales_files[0]) if non_sales_files else build_non_sales_drilldown(priority, target_score)
-non_sales_business_type_top = pd.read_parquet(non_sales_type_files[0]) if non_sales_type_files else build_non_sales_business_type_top(response, team)
-store_non_sales_trend = pd.read_parquet(non_sales_trend_files[0]) if non_sales_trend_files else build_store_non_sales_trend(response, team)
-sales_good_non_sales_weak = pd.read_parquet(sales_good_ns_weak_files[0]) if sales_good_ns_weak_files else build_sales_good_non_sales_weak(priority, target_score)
-nps_source_recalc_diff = pd.read_parquet(nps_diff_files[0]) if nps_diff_files else build_nps_source_recalc_diff(priority)
-sample_warning = pd.read_parquet(sample_warning_files[0]) if sample_warning_files else build_sample_warning(priority, target_score)
-daily_nps_trend = pd.read_parquet(daily_nps_trend_files[0]) if daily_nps_trend_files else build_daily_nps_trend(response, team)
-nps_time_intelligence = build_nps_time_intelligence(response, team, target_score, report_date=None) if not response.empty else (pd.read_parquet(nps_time_intelligence_files[0]) if nps_time_intelligence_files else pd.DataFrame())
-store_daily_heatmap = pd.read_parquet(store_daily_heatmap_files[0]) if store_daily_heatmap_files else build_store_daily_heatmap(response, team, axis="비판매성")
-weekday_time_hotspots = pd.read_parquet(weekday_time_hotspots_files[0]) if weekday_time_hotspots_files else build_weekday_time_hotspots(response, team, axis="비판매성")
-action_sheet = pd.read_parquet(action_sheet_files[0]) if action_sheet_files else build_store_action_sheet(
+non_sales_drilldown = pd.read_parquet(non_sales_file) if non_sales_file else build_non_sales_drilldown(priority, target_score)
+non_sales_business_type_top = pd.read_parquet(non_sales_type_file) if non_sales_type_file else build_non_sales_business_type_top(response, team)
+store_non_sales_trend = pd.read_parquet(non_sales_trend_file) if non_sales_trend_file else build_store_non_sales_trend(response, team)
+sales_good_non_sales_weak = pd.read_parquet(sales_good_ns_weak_file) if sales_good_ns_weak_file else build_sales_good_non_sales_weak(priority, target_score)
+nps_source_recalc_diff = pd.read_parquet(nps_diff_file) if nps_diff_file else build_nps_source_recalc_diff(priority)
+sample_warning = pd.read_parquet(sample_warning_file) if sample_warning_file else build_sample_warning(priority, target_score)
+daily_nps_trend = pd.read_parquet(daily_nps_trend_file) if daily_nps_trend_file else build_daily_nps_trend(response, team)
+nps_time_intelligence = build_nps_time_intelligence(response, team, target_score, report_date=None) if not response.empty else (pd.read_parquet(nps_time_intelligence_file) if nps_time_intelligence_file else pd.DataFrame())
+store_daily_heatmap = pd.read_parquet(store_daily_heatmap_file) if store_daily_heatmap_file else build_store_daily_heatmap(response, team, axis="비판매성")
+weekday_time_hotspots = pd.read_parquet(weekday_time_hotspots_file) if weekday_time_hotspots_file else build_weekday_time_hotspots(response, team, axis="비판매성")
+action_sheet = pd.read_parquet(action_sheet_file) if action_sheet_file else build_store_action_sheet(
     priority,
     negative[negative["team_name"].astype(str).str.strip().eq(team)] if not negative.empty and "team_name" in negative.columns else negative,
     target_score,
 )
 store_daily_lookup = build_store_daily_lookup(response, team) if not response.empty else {}
-report_date = priority["report_date"].dropna().astype(str).iloc[0][:10] if "report_date" in priority.columns and priority["report_date"].notna().any() else priority_files[0].stem[-8:]
+report_date = priority["report_date"].dropna().astype(str).iloc[0][:10] if "report_date" in priority.columns and priority["report_date"].notna().any() else (priority_file.stem[-8:] if priority_file else "unknown")
 
 agency_options = sorted([str(x) for x in priority.get("agency_name", pd.Series(dtype=object)).dropna().unique()])
 selected_agencies = st.sidebar.multiselect("대리점 필터", agency_options, default=[])
