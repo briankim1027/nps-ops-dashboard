@@ -15,6 +15,24 @@ VOC_RULES: list[tuple[str, list[str], str]] = [
     ("업무처리 미흡", ["처리", "개통", "변경", "해지", "수납", "유심", "USIM", "명의", "번호", "기기", "오류", "실수", "누락"], "업무별 체크리스트 재확인, 처리 완료 전 고객 확인 절차 강화"),
     ("재고/상품/품질", ["재고", "제품", "기기", "폰", "단말", "품질", "고장", "불량", "색상"], "재고/상품 안내 정확도와 대체 제안 스크립트 점검"),
 ]
+POSITIVE_VOC_RULES: list[tuple[str, list[str], str]] = [
+    ("친절/응대태도", ["친절", "상냥", "응대", "자세", "태도", "웃", "기분"], "첫 응대 톤과 고객 눈높이 설명을 우수 cue로 공유"),
+    ("설명/안내/상담", ["설명", "안내", "상담", "자세", "알려", "이해", "궁금"], "요금·약정·처리조건을 고객 언어로 풀어 설명한 사례 공유"),
+    ("신속/처리속도", ["빠르", "신속", "바로", "빨리", "즉시", "처리"], "대기·처리 시간을 줄이고 완료 안내까지 연결한 사례 공유"),
+    ("업무처리/문제해결", ["해결", "처리", "도움", "완료", "잘해", "만족"], "문제 해결 후 고객 확인 멘트를 포함한 마무리 루틴 공유"),
+]
+
+
+def classify_positive_voc(reason: Any, business_type: Any = "") -> tuple[str, str]:
+    reason_norm = str(reason or "").strip().lower()
+    if not reason_norm or reason_norm in NO_CONTENT_PATTERNS:
+        return "무의미/내용없음", "원문만으로 우수 cue 판단 어려움"
+    text_norm = re.sub(r"\s+", " ", " ".join([str(reason or ""), str(business_type or "")])).lower()
+    for category, keywords, cue in POSITIVE_VOC_RULES:
+        if any(k.lower() in text_norm for k in keywords):
+            return category, cue
+    return "기타 긍정응대", "추천 VOC 원문을 공유 전 현장 맥락에 맞게 수기 확인"
+
 
 NO_CONTENT_PATTERNS = ["없음", "없어요", "없습니다", "없다", "무", "nan", "none", ".", "-", "네", "예", "아", "보통", "그냥 보통이에요"]
 
@@ -865,3 +883,121 @@ def build_store_action_card(store_row: pd.Series, store_negative: pd.DataFrame, 
         "representative_vocs": rep_vocs,
         "actions": actions, "quant_goal": quant_goal, "verify_metric": verify_metric,
     }
+
+
+# Raw-ledger VOC execution layers -------------------------------------------------
+VOC_NO_ISSUE_RE = re.compile(r"없었|없어요|없습니다|없음|괜찮|만족스러|(?:불편|문제|이상|특별히|딱히).{0,5}(?:없|않)")
+
+
+def build_voc_benchmark_gap(response_fact: pd.DataFrame, team: str = "전북", axis: str = "비판매성", min_responses: int = 5) -> pd.DataFrame:
+    """Store/agency business-type NPS gap versus HQ/team benchmarks.
+
+    Purpose: turn the raw ledger into a coaching benchmark. Staff columns remain in
+    the raw fact table, but this output is aggregated to store × business_type so it
+    can be used for field coaching without defaulting to personal evaluation.
+    """
+    if response_fact.empty:
+        return pd.DataFrame()
+    df = response_fact.copy()
+    if "NCSI" in df.columns and axis != "종합":
+        df = df[df["NCSI"].astype(str).str.strip().eq(axis)].copy()
+    if df.empty:
+        return pd.DataFrame()
+    for c in ["team_name", "agency_name", "store_code", "store_name", "business_type"]:
+        if c not in df.columns:
+            df[c] = ""
+    for c in ["promoter_flag", "passive_flag", "detractor_flag"]:
+        df[c] = pd.to_numeric(df.get(c, 0), errors="coerce").fillna(0).astype(int)
+    dims = ["business_type"]
+    hq = df.groupby(dims, dropna=False).agg(hq_promoters=("promoter_flag", "sum"), hq_passives=("passive_flag", "sum"), hq_detractors=("detractor_flag", "sum"), hq_total_responses=("promoter_flag", "size")).reset_index()
+    hq["hq_nps"] = hq.apply(lambda r: nps_score(r.hq_promoters, r.hq_detractors, r.hq_total_responses), axis=1)
+    team_df = df[df["team_name"].astype(str).str.strip().eq(team)].copy()
+    if team_df.empty:
+        return pd.DataFrame()
+    team_biz = team_df.groupby(dims, dropna=False).agg(team_promoters=("promoter_flag", "sum"), team_passives=("passive_flag", "sum"), team_detractors=("detractor_flag", "sum"), team_total_responses=("promoter_flag", "size")).reset_index()
+    team_biz["team_nps"] = team_biz.apply(lambda r: nps_score(r.team_promoters, r.team_detractors, r.team_total_responses), axis=1)
+    store_dims = ["agency_name", "store_code", "store_name", "business_type"]
+    store = team_df.groupby(store_dims, dropna=False).agg(promoters=("promoter_flag", "sum"), passives=("passive_flag", "sum"), detractors=("detractor_flag", "sum"), total_responses=("promoter_flag", "size")).reset_index()
+    store["nps"] = store.apply(lambda r: nps_score(r.promoters, r.detractors, r.total_responses), axis=1)
+    out = store.merge(team_biz, on="business_type", how="left").merge(hq, on="business_type", how="left")
+    out["gap_vs_hq"] = out["nps"] - out["hq_nps"]
+    out["gap_vs_team"] = out["nps"] - out["team_nps"]
+    out["risk_count"] = out["passives"] + out["detractors"]
+    out["benchmark_priority"] = out["risk_count"] * 8 + (-out["gap_vs_hq"].clip(upper=0) / 5) + out["total_responses"].clip(upper=30) / 10
+    out = out[out["total_responses"] >= min_responses].copy()
+    return out.sort_values(["benchmark_priority", "detractors", "total_responses"], ascending=False)
+
+
+def build_repeated_voc_themes(response_fact: pd.DataFrame, team: str = "전북", axis: str = "비판매성", min_risk: int = 2) -> pd.DataFrame:
+    """Repeated store × business_type × VOC theme risk themes for coaching."""
+    if response_fact.empty:
+        return pd.DataFrame()
+    df = response_fact.copy()
+    if "NCSI" in df.columns and axis != "종합":
+        df = df[df["NCSI"].astype(str).str.strip().eq(axis)].copy()
+    if "team_name" in df.columns:
+        df = df[df["team_name"].astype(str).str.strip().eq(team)].copy()
+    if df.empty:
+        return pd.DataFrame()
+    # Align with existing rule-based taxonomy. This does not send company data out.
+    if "reason_text" not in df.columns and "comment_text" in df.columns:
+        df = df.rename(columns={"comment_text": "reason_text"})
+    df = add_voc_classification(df)
+    for c in ["agency_name", "store_code", "store_name", "business_type", "voc_category"]:
+        if c not in df.columns:
+            df[c] = ""
+    for c in ["promoter_flag", "passive_flag", "detractor_flag"]:
+        df[c] = pd.to_numeric(df.get(c, 0), errors="coerce").fillna(0).astype(int)
+    risk = df[(df["passive_flag"].eq(1)) | (df["detractor_flag"].eq(1))].copy()
+    if risk.empty:
+        return pd.DataFrame()
+    txt = risk.get("reason_text", pd.Series("", index=risk.index)).fillna("").astype(str).str.strip()
+    risk["has_meaningful_voc"] = txt.ne("") & ~txt.str.contains(VOC_NO_ISSUE_RE, regex=True)
+    if "process_date" in risk.columns:
+        risk["risk_date"] = pd.to_datetime(risk["process_date"], errors="coerce").dt.normalize()
+    else:
+        risk["risk_date"] = pd.NaT
+    dims = ["agency_name", "store_code", "store_name", "business_type", "voc_category"]
+    out = risk.groupby(dims, dropna=False).agg(
+        risk_count=("promoter_flag", "size"),
+        detractors=("detractor_flag", "sum"),
+        passives=("passive_flag", "sum"),
+        meaningful_voc_count=("has_meaningful_voc", "sum"),
+        repeat_days=("risk_date", "nunique"),
+    ).reset_index()
+    rep = risk[risk["has_meaningful_voc"]].sort_values(["detractor_flag", "recommend_score"], ascending=[False, True], na_position="last") if "recommend_score" in risk.columns else risk[risk["has_meaningful_voc"]]
+    if not rep.empty:
+        rep_voc = rep.groupby(dims, as_index=False).first()[dims + ["reason_text"]].rename(columns={"reason_text": "representative_voc"})
+        out = out.merge(rep_voc, on=dims, how="left")
+    else:
+        out["representative_voc"] = pd.NA
+    out["repeat_score"] = out["risk_count"] * 5 + out["detractors"] * 8 + out["repeat_days"] * 3 + out["meaningful_voc_count"]
+    out = out[(out["risk_count"] >= min_risk) | (out["repeat_days"] >= 2)].copy()
+    return out.sort_values(["repeat_score", "detractors", "risk_count"], ascending=False)
+
+
+def build_positive_voc_library(response_fact: pd.DataFrame, team: str = "전북", axis: str = "비판매성", limit: int = 120) -> pd.DataFrame:
+    """Reusable good-response VOC examples from promoters for field sharing."""
+    if response_fact.empty:
+        return pd.DataFrame()
+    df = response_fact.copy()
+    if "NCSI" in df.columns and axis != "종합":
+        df = df[df["NCSI"].astype(str).str.strip().eq(axis)].copy()
+    if "team_name" in df.columns:
+        df = df[df["team_name"].astype(str).str.strip().eq(team)].copy()
+    if df.empty:
+        return pd.DataFrame()
+    if "reason_text" not in df.columns and "comment_text" in df.columns:
+        df = df.rename(columns={"comment_text": "reason_text"})
+    df = df[pd.to_numeric(df.get("recommend_score"), errors="coerce").ge(9)].copy()
+    txt = df.get("reason_text", pd.Series("", index=df.index)).fillna("").astype(str).str.strip()
+    df = df[txt.ne("") & ~txt.str.contains(VOC_NO_ISSUE_RE, regex=True)].copy()
+    if df.empty:
+        return pd.DataFrame()
+    pairs = df.apply(lambda r: classify_positive_voc(r.get("reason_text"), r.get("business_type")), axis=1)
+    df["voc_category"] = [p[0] for p in pairs]
+    df["good_response_cue"] = [p[1] for p in pairs]
+    cols = [c for c in ["process_date", "agency_name", "store_code", "store_name", "business_type", "recommend_score", "voc_category", "reason_text", "good_response_cue"] if c in df.columns]
+    out = df[cols].copy()
+    out = out[out["voc_category"].ne("무의미/내용없음")].copy()
+    return out.head(limit)

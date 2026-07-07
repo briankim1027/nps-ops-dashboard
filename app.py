@@ -27,6 +27,7 @@ from nps_ops.insights import (
     build_daily_nps_trend,
     build_non_sales_business_type_top,
     build_non_sales_drilldown,
+    build_positive_voc_library,
     build_nps_source_recalc_diff,
     build_nps_time_intelligence,
     build_sample_warning,
@@ -36,6 +37,8 @@ from nps_ops.insights import (
     build_store_daily_heatmap,
     build_store_daily_lookup,
     build_store_non_sales_trend,
+    build_voc_benchmark_gap,
+    build_repeated_voc_themes,
     build_weekday_time_hotspots,
 )
 from nps_ops.metrics import required_promoters_to_target, sample_confidence, sample_grade
@@ -340,6 +343,24 @@ daily_nps_trend_files = sorted(PROCESSED_DIR.glob(f"daily_nps_trend_{team}_*.par
 nps_time_intelligence_files = sorted(PROCESSED_DIR.glob(f"nps_time_intelligence_{team}_*.parquet"), reverse=True)
 store_daily_heatmap_files = sorted(PROCESSED_DIR.glob(f"store_daily_heatmap_{team}_*.parquet"), reverse=True)
 weekday_time_hotspots_files = sorted(PROCESSED_DIR.glob(f"weekday_time_hotspots_{team}_*.parquet"), reverse=True)
+voc_benchmark_files = sorted(PROCESSED_DIR.glob(f"voc_benchmark_gap_{team}_*.parquet"), reverse=True)
+repeated_voc_files = sorted(PROCESSED_DIR.glob(f"repeated_voc_themes_{team}_*.parquet"), reverse=True)
+positive_voc_files = sorted(PROCESSED_DIR.glob(f"positive_voc_library_{team}_*.parquet"), reverse=True)
+
+def is_operating_priority_file(path: Path) -> bool:
+    """Exclude VOC reference/raw-ledger artifacts from the primary date picker."""
+    try:
+        meta = pd.read_parquet(path, columns=["source_file"])
+        if not meta.empty:
+            source_name = str(meta["source_file"].dropna().astype(str).iloc[0]).lower() if meta["source_file"].notna().any() else ""
+            if "raw_" in source_name or "추천사유only" in source_name:
+                return False
+    except Exception:
+        return True
+    return True
+
+
+priority_files = [p for p in priority_files if is_operating_priority_file(p)]
 
 available_dates = []
 for p in priority_files:
@@ -366,6 +387,19 @@ def get_file_for_date(files_list, date_str):
             return f
     return files_list[0] if files_list else None
 
+
+def get_latest_reference_file(files_list):
+    # VOC enrichment is a reference layer. Use the latest available reference,
+    # independent from the operating 기준일/date picker.
+    return files_list[0] if files_list else None
+
+
+def file_date_label(path: Path | None) -> str:
+    if path is None:
+        return "없음"
+    date_str = path.stem.split("_")[-1]
+    return f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:]}" if len(date_str) == 8 and date_str.isdigit() else path.stem
+
 priority_file = get_file_for_date(priority_files, selected_date)
 response_file = get_file_for_date(response_files, selected_date)
 negative_file = get_file_for_date(negative_files, selected_date)
@@ -382,6 +416,10 @@ daily_nps_trend_file = get_file_for_date(daily_nps_trend_files, selected_date)
 nps_time_intelligence_file = get_file_for_date(nps_time_intelligence_files, selected_date)
 store_daily_heatmap_file = get_file_for_date(store_daily_heatmap_files, selected_date)
 weekday_time_hotspots_file = get_file_for_date(weekday_time_hotspots_files, selected_date)
+voc_benchmark_file = get_latest_reference_file(voc_benchmark_files)
+repeated_voc_file = get_latest_reference_file(repeated_voc_files)
+positive_voc_file = get_latest_reference_file(positive_voc_files)
+voc_reference_label = file_date_label(voc_benchmark_file or repeated_voc_file or positive_voc_file)
 
 priority = pd.read_parquet(priority_file) if priority_file else pd.DataFrame()
 response = pd.read_parquet(response_file) if response_file else pd.DataFrame()
@@ -398,6 +436,9 @@ daily_nps_trend = pd.read_parquet(daily_nps_trend_file) if daily_nps_trend_file 
 nps_time_intelligence = build_nps_time_intelligence(response, team, target_score, report_date=None) if not response.empty else (pd.read_parquet(nps_time_intelligence_file) if nps_time_intelligence_file else pd.DataFrame())
 store_daily_heatmap = pd.read_parquet(store_daily_heatmap_file) if store_daily_heatmap_file else build_store_daily_heatmap(response, team, axis="비판매성")
 weekday_time_hotspots = pd.read_parquet(weekday_time_hotspots_file) if weekday_time_hotspots_file else build_weekday_time_hotspots(response, team, axis="비판매성")
+voc_benchmark_gap = pd.read_parquet(voc_benchmark_file) if voc_benchmark_file else build_voc_benchmark_gap(response, team, axis="비판매성")
+repeated_voc_themes = pd.read_parquet(repeated_voc_file) if repeated_voc_file else build_repeated_voc_themes(response, team, axis="비판매성")
+positive_voc_library = pd.read_parquet(positive_voc_file) if positive_voc_file else build_positive_voc_library(response, team, axis="비판매성")
 action_sheet = pd.read_parquet(action_sheet_file) if action_sheet_file else build_store_action_sheet(
     priority,
     negative[negative["team_name"].astype(str).str.strip().eq(team)] if not negative.empty and "team_name" in negative.columns else negative,
@@ -405,6 +446,8 @@ action_sheet = pd.read_parquet(action_sheet_file) if action_sheet_file else buil
 )
 store_daily_lookup = build_store_daily_lookup(response, team) if not response.empty else {}
 report_date = priority["report_date"].dropna().astype(str).iloc[0][:10] if "report_date" in priority.columns and priority["report_date"].notna().any() else (priority_file.stem[-8:] if priority_file else "unknown")
+
+st.sidebar.caption(f"운영 NPS 기준: {selected_date_fmt} · VOC 보강 기준: {voc_reference_label}")
 
 agency_options = sorted([str(x) for x in priority.get("agency_name", pd.Series(dtype=object)).dropna().unique()])
 selected_agencies = st.sidebar.multiselect("대리점 필터", agency_options, default=[])
@@ -424,6 +467,9 @@ sales_good_non_sales_weak_view_base = apply_agency_filter(sales_good_non_sales_w
 nps_source_recalc_diff_view_base = apply_agency_filter(nps_source_recalc_diff)
 sample_warning_view_base = apply_agency_filter(sample_warning)
 store_daily_heatmap_view_base = apply_agency_filter(store_daily_heatmap)
+voc_benchmark_view_base = apply_agency_filter(voc_benchmark_gap)
+repeated_voc_view_base = apply_agency_filter(repeated_voc_themes)
+positive_voc_view_base = apply_agency_filter(positive_voc_library)
 
 st.markdown(
     f"""
@@ -1032,8 +1078,8 @@ for tab, dtype in zip(action_tabs, ACTION_CARD_TYPES):
                 components.html(block_html, height=block_height, scrolling=True)
 
 st.markdown('<div class="skt-section-title">비판매성 Drill-down — Action Card 근거 확인</div>', unsafe_allow_html=True)
-st.markdown('<div class="skt-section-caption">Action Card의 근거를 더 확인하는 영역입니다. 비판매성 업무유형, 매장별 추이, 판매성은 양호하지만 비판매성만 낮은 매장을 분리해 봅니다.</div>', unsafe_allow_html=True)
-ns_tab1, ns_tab2, ns_tab3, ns_tab4 = st.tabs(["집중관리 매장", "업무유형 Top", "매장별 추이", "판매성 양호·비판매성 취약"])
+st.markdown('<div class="skt-section-caption">Action Card의 근거를 더 확인하는 영역입니다. 비판매성 업무유형, 매장별 추이, 판매성은 양호하지만 비판매성만 낮은 매장을 분리해 봅니다. 본부 VoC 보강 레이어는 \'26년 상반기 누적 데이터를 사용합니다.</div>', unsafe_allow_html=True)
+ns_tab1, ns_tab2, ns_tab3, ns_tab4, ns_tab5, ns_tab6, ns_tab7 = st.tabs(["집중관리 매장", "업무유형 Top", "매장별 추이", "판매성 양호·비판매성 취약", "본부 Benchmark Gap", "매장별 VOC Theme", "우수 VOC Library"])
 with ns_tab1:
     if non_sales_drilldown_view_base.empty:
         st.info("비판매성 Drill-down 데이터가 없습니다.")
@@ -1133,6 +1179,252 @@ with ns_tab4:
             "비판매성 목표Gap": st.column_config.NumberColumn("비판매성 목표Gap", format="%.1f"),
             "Care Priority": st.column_config.NumberColumn("Care Priority", format="%.1f"),
         })
+
+with ns_tab5:
+    st.markdown("**본부 평균 대비 매장×업무유형 NPS 차이** — 전북 매장이 같은 업무유형의 본부 평균보다 어디서 낮고, 어디서 우수한지 분리해서 봅니다.")
+    st.markdown(
+        f"""
+        <div class="skt-help-box">
+          <div class="skt-help-title">Gap 해석 기준</div>
+          <div class="skt-formula">본부 평균 대비 차이 = 해당 매장×업무유형 NPS - 본부 전체 같은 업무유형 NPS</div>
+          <div class="skt-help-grid">
+            <div class="skt-help-item"><span class="skt-chip orange">- Gap</span><span class="skt-help-text">본부 평균보다 낮음 → 코칭 우선 확인 후보</span></div>
+            <div class="skt-help-item"><span class="skt-chip green">+ Gap</span><span class="skt-help-text">본부 평균보다 높음 → 우수 사례·벤치마크 후보</span></div>
+            <div class="skt-help-item"><span class="skt-chip gray">기준기간</span><span class="skt-help-text">'26년 상반기(1월~6월) 누적 데이터 사용</span></div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    if voc_benchmark_view_base.empty:
+        st.info("본부 Benchmark Gap 데이터가 없습니다. raw v1 기준 `scripts/build_data.py`를 다시 실행하세요.")
+    else:
+        bm = voc_benchmark_view_base.copy()
+        numeric_cols = [
+            "promoters", "passives", "detractors", "total_responses", "nps",
+            "team_promoters", "team_passives", "team_detractors", "team_total_responses", "team_nps",
+            "hq_promoters", "hq_passives", "hq_detractors", "hq_total_responses", "hq_nps",
+            "gap_vs_hq", "gap_vs_team", "risk_count", "benchmark_priority",
+        ]
+        for c in numeric_cols:
+            if c in bm.columns:
+                bm[c] = pd.to_numeric(bm.get(c), errors="coerce")
+        bm["gap_signal"] = bm["gap_vs_hq"].apply(lambda v: "본부 평균 상회 · 우수/확산 후보" if pd.notna(v) and v >= 0 else "본부 평균 하회 · 코칭 우선 후보")
+        bm_show = bm.sort_values(["benchmark_priority", "gap_vs_hq"], ascending=[False, True]).head(60).rename(columns={
+            "agency_name": "대리점", "store_name": "매장", "business_type": "업무유형",
+            "promoters": "추천", "passives": "중립", "detractors": "비추천", "total_responses": "비판매성 응답",
+            "nps": "매장 NPS",
+            "team_promoters": "전북 추천", "team_passives": "전북 중립", "team_detractors": "전북 비추천", "team_total_responses": "전북 누적응답", "team_nps": "전북 평균 NPS",
+            "hq_promoters": "본부 추천", "hq_passives": "본부 중립", "hq_detractors": "본부 비추천", "hq_total_responses": "본부 누적응답", "hq_nps": "본부 평균 NPS",
+            "gap_vs_hq": "본부 평균 대비 차이", "gap_vs_team": "전북 평균 대비 차이",
+            "risk_count": "Risk건수", "benchmark_priority": "Benchmark Priority", "gap_signal": "Gap 해석",
+        })
+        fig = px.bar(
+            bm_show.head(20),
+            x="본부 평균 대비 차이",
+            y="매장",
+            color="Gap 해석",
+            orientation="h",
+            hover_data=["대리점", "업무유형", "비판매성 응답", "추천", "중립", "비추천", "Risk건수"],
+            color_discrete_map={"본부 평균 하회 · 코칭 우선 후보": "#DC6339", "본부 평균 상회 · 우수/확산 후보": "#249A45"},
+        )
+        fig.add_vline(x=0, line_width=2, line_dash="solid", line_color="#1A1A1A", annotation_text="본부 평균", annotation_position="top")
+        fig.update_layout(height=560, plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", yaxis=dict(categoryorder="total ascending"), xaxis_title="본부 평균 대비 NPS 차이(+ 상회 / - 하회)")
+        st.plotly_chart(fig, use_container_width=True)
+
+        st.markdown("---")
+        st.markdown("**상반기 누적 업무유형 Risk 분포** — 아래 두 차트는 `매장별 VOC Theme` 탭의 운영데이터가 아니라, 본부 Benchmark Gap과 같은 **'26년 상반기 누적 기준**으로 봅니다.")
+        st.caption("현재 Benchmark Gap artifact에는 원문 VOC/Theme 분류 컬럼이 없으므로, 고객 상담 현장에서 바로 해석 가능한 `업무유형` 기준으로 Risk건수를 집계합니다.")
+
+        benchmark_risk = bm.copy()
+        benchmark_risk["business_type"] = benchmark_risk.get("business_type", "미분류").fillna("미분류").astype(str)
+        benchmark_risk["store_name"] = benchmark_risk.get("store_name", "미분류").fillna("미분류").astype(str)
+        benchmark_risk["risk_count"] = pd.to_numeric(benchmark_risk.get("risk_count", 0), errors="coerce").fillna(0)
+        benchmark_risk = benchmark_risk[benchmark_risk["risk_count"] > 0].copy()
+
+        if benchmark_risk.empty:
+            st.info("상반기 누적 Risk 업무유형 분포를 표시할 데이터가 없습니다.")
+        else:
+            team_type_risk = (
+                benchmark_risk.groupby("business_type", as_index=False)["risk_count"].sum()
+                .sort_values("risk_count", ascending=False)
+            )
+            total_benchmark_risk = float(team_type_risk["risk_count"].sum())
+            team_type_risk["risk_share"] = team_type_risk["risk_count"] / total_benchmark_risk if total_benchmark_risk else 0
+            team_type_risk["업무유형 설명"] = team_type_risk.apply(
+                lambda r: f"{r['business_type']} · {int(r['risk_count']):,}건 · {r['risk_share'] * 100:.1f}%",
+                axis=1,
+            )
+            business_type_order = team_type_risk["business_type"].tolist()
+            benchmark_type_palette = px.colors.qualitative.Set2 + px.colors.qualitative.Bold + px.colors.qualitative.Pastel
+            benchmark_type_color_map = {
+                business_type: benchmark_type_palette[i % len(benchmark_type_palette)]
+                for i, business_type in enumerate(business_type_order)
+            }
+            top_type = team_type_risk.iloc[0]
+            st.info(
+                f"전북팀 상반기 누적 비판매성 Risk 중 `{top_type['business_type']}`이 "
+                f"{int(top_type['risk_count']):,}건({top_type['risk_share'] * 100:.1f}%)으로 가장 큽니다. "
+                "이 분포는 운영 기준일 Action Card가 아니라 상반기 누적 참고 패턴입니다."
+            )
+
+            fig_type = px.bar(
+                team_type_risk,
+                x="business_type",
+                y="risk_count",
+                text="업무유형 설명",
+                color="business_type",
+                color_discrete_map=benchmark_type_color_map,
+                category_orders={"business_type": business_type_order},
+                labels={"business_type": "업무유형", "risk_count": "Risk건수"},
+            )
+            fig_type.update_traces(textposition="outside", hovertemplate="%{x}<br>Risk건수=%{y:,}<extra></extra>")
+            fig_type.update_layout(
+                height=420,
+                showlegend=False,
+                xaxis_title="상반기 누적 업무유형",
+                yaxis_title="Risk건수 (중립+비추천)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                paper_bgcolor="rgba(0,0,0,0)",
+            )
+            st.plotly_chart(fig_type, use_container_width=True)
+
+            store_risk_total = (
+                benchmark_risk.groupby("store_name", as_index=False)["risk_count"].sum()
+                .sort_values("risk_count", ascending=False)
+                .head(20)
+            )
+            top_store_order = store_risk_total["store_name"].tolist()
+            store_type_risk = (
+                benchmark_risk[benchmark_risk["store_name"].isin(top_store_order)]
+                .groupby(["store_name", "business_type"], as_index=False)["risk_count"].sum()
+            )
+            # Plotly Express reverses horizontal category arrays internally;
+            # passing the descending order below renders the highest-risk store at the visual top.
+            fig_store_type = px.bar(
+                store_type_risk,
+                x="risk_count",
+                y="store_name",
+                color="business_type",
+                orientation="h",
+                barmode="stack",
+                category_orders={"store_name": top_store_order, "business_type": business_type_order},
+                color_discrete_map=benchmark_type_color_map,
+                labels={"risk_count": "Risk건수", "store_name": "매장", "business_type": "업무유형"},
+            )
+            fig_store_type.update_layout(
+                height=640,
+                xaxis_title="Risk건수 (중립+비추천)",
+                yaxis_title="상반기 누적 Risk 상위 20개 매장",
+                legend_title_text="업무유형",
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                plot_bgcolor="rgba(0,0,0,0)",
+                paper_bgcolor="rgba(0,0,0,0)",
+            )
+            st.plotly_chart(fig_store_type, use_container_width=True)
+
+        display_cols = [c for c in [
+            "Gap 해석", "대리점", "매장", "업무유형", "비판매성 응답", "추천", "중립", "비추천",
+            "매장 NPS", "전북 평균 NPS", "본부 평균 NPS", "전북 평균 대비 차이", "본부 평균 대비 차이",
+            "전북 누적응답", "본부 누적응답", "Risk건수", "Benchmark Priority",
+        ] if c in bm_show.columns]
+        st.dataframe(bm_show[display_cols], use_container_width=True, hide_index=True, column_config={
+            "비판매성 응답": st.column_config.NumberColumn("비판매성 응답", format="%d"),
+            "추천": st.column_config.NumberColumn("추천", format="%d"),
+            "중립": st.column_config.NumberColumn("중립", format="%d"),
+            "비추천": st.column_config.NumberColumn("비추천", format="%d"),
+            "매장 NPS": st.column_config.NumberColumn("매장 NPS", format="%.1f"),
+            "전북 평균 NPS": st.column_config.NumberColumn("전북 평균 NPS", format="%.1f"),
+            "본부 평균 NPS": st.column_config.NumberColumn("본부 평균 NPS", format="%.1f"),
+            "본부 평균 대비 차이": st.column_config.NumberColumn("본부 평균 대비 차이", format="%.1f"),
+            "전북 평균 대비 차이": st.column_config.NumberColumn("전북 평균 대비 차이", format="%.1f"),
+            "전북 누적응답": st.column_config.NumberColumn("전북 누적응답", format="%d"),
+            "본부 누적응답": st.column_config.NumberColumn("본부 누적응답", format="%d"),
+            "Risk건수": st.column_config.NumberColumn("Risk건수", format="%d"),
+            "Benchmark Priority": st.column_config.NumberColumn("Benchmark Priority", format="%.1f"),
+        })
+with ns_tab6:
+    st.markdown("**매장별 VOC Theme** <span style='background:#e8f0fe;color:#1a73e8;font-size:0.75rem;padding:2px 8px;border-radius:10px;margin-left:8px;'>운영데이터 기준</span> — 각 매장별로 어떤 비판매성 VOC Theme가 가장 자주 발생하는지 확인합니다.", unsafe_allow_html=True)
+    if repeated_voc_view_base.empty:
+        st.info("매장별 VOC Theme 데이터가 없습니다.")
+    else:
+        rv = repeated_voc_view_base.copy()
+        for c in ["risk_count", "detractors", "passives", "meaningful_voc_count", "repeat_days", "repeat_score"]:
+            rv[c] = pd.to_numeric(rv.get(c), errors="coerce").fillna(0)
+        # Chart: 매장별 Theme 누적 bar
+        if "store_name" in rv.columns and "voc_category" in rv.columns:
+            valid_voc = rv[rv["voc_category"] != "무의미/내용없음"].copy()
+            bar_data = valid_voc.groupby(["store_name", "voc_category"], as_index=False)["risk_count"].sum()
+            store_order = (
+                bar_data.groupby("store_name")["risk_count"].sum()
+                .sort_values(ascending=False)
+                .head(30)
+                .index.tolist()
+            )
+            bar_plot = bar_data[bar_data["store_name"].isin(store_order)].rename(
+                columns={"store_name": "매장", "voc_category": "VOC Theme", "risk_count": "Risk건수"}
+            )
+            fig = px.bar(
+                bar_plot, x="매장", y="Risk건수", color="VOC Theme", barmode="stack",
+                category_orders={"매장": store_order},
+                color_discrete_sequence=px.colors.qualitative.Bold,
+                labels={"Risk건수": "Risk건수 (비추천+중립)"},
+            )
+            fig.update_layout(
+                height=480, xaxis_tickangle=-45,
+                plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        # Table: 매장별 주요 Theme / Risk건수 / 비추천 / 중립 / 대표 VOC
+        store_total = rv.groupby(["agency_name", "store_name"], as_index=False).agg(
+            risk_count=("risk_count", "sum"),
+            detractors=("detractors", "sum"),
+            passives=("passives", "sum"),
+        )
+        valid_voc_for_top = rv[rv["voc_category"] != "무의미/내용없음"] if "voc_category" in rv.columns else rv
+        top_per_store = (
+            valid_voc_for_top.sort_values("risk_count", ascending=False)
+            .groupby("store_name", as_index=False)
+            .first()[["store_name", "voc_category", "representative_voc"]]
+        )
+        store_summary = store_total.merge(top_per_store, on="store_name", how="left")
+        store_summary["코칭 포인트"] = store_summary.apply(
+            lambda r: (
+                f"이 매장은 비판매성 VOC 중 '{r['voc_category']}'이 가장 많이 반복됩니다."
+                if pd.notna(r.get("voc_category")) else "VOC 분류 데이터가 없습니다."
+            ),
+            axis=1,
+        )
+        store_summary = store_summary.sort_values("risk_count", ascending=False)
+        ss_view = store_summary.rename(columns={
+            "agency_name": "대리점", "store_name": "매장", "voc_category": "주요 VOC Theme",
+            "risk_count": "Risk건수", "detractors": "비추천", "passives": "중립",
+            "representative_voc": "대표 VOC",
+        })
+        show_cols = [c for c in ["대리점", "매장", "주요 VOC Theme", "Risk건수", "비추천", "중립", "대표 VOC", "코칭 포인트"] if c in ss_view.columns]
+        st.dataframe(
+            ss_view[show_cols],
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Risk건수": st.column_config.NumberColumn("Risk건수", format="%d"),
+                "비추천": st.column_config.NumberColumn("비추천", format="%d"),
+                "중립": st.column_config.NumberColumn("중립", format="%d"),
+            },
+        )
+with ns_tab7:
+    st.markdown("**우수 VOC Library** — 추천 고객의 표현을 좋은 응대 cue로 모아 현장 공유 문구로 활용합니다.")
+    if positive_voc_view_base.empty:
+        st.info("우수 VOC Library 데이터가 없습니다.")
+    else:
+        pv = positive_voc_view_base.copy().rename(columns={
+            "process_date": "업무처리일", "agency_name": "대리점", "store_name": "매장", "business_type": "업무유형", "recommend_score": "추천지수",
+            "voc_category": "긍정 Theme", "reason_text": "추천 VOC", "good_response_cue": "공유 Cue",
+        })
+        display_cols = [c for c in ["업무처리일", "대리점", "매장", "업무유형", "추천지수", "긍정 Theme", "추천 VOC", "공유 Cue"] if c in pv.columns]
+        st.dataframe(pv[display_cols].head(120), use_container_width=True, hide_index=True)
+
 
 st.markdown('<div class="skt-section-title">T크루 Coaching 후보 — 매장 코칭을 사람 단위로 좁히기</div>', unsafe_allow_html=True)
 st.markdown('<div class="skt-section-caption">개인 평가가 아니라 코칭 후보 탐색입니다. n≥5 기준에서 중립/비추천 건수와 목표 Gap을 함께 보고, 매장 코칭 시 확인할 대상을 좁힙니다.</div>', unsafe_allow_html=True)

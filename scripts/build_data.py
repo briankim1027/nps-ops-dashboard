@@ -27,6 +27,7 @@ from nps_ops.insights import (
     add_voc_classification,
     build_daily_nps_trend,
     build_non_sales_business_type_top,
+    build_positive_voc_library,
     build_non_sales_drilldown,
     build_nps_source_recalc_diff,
     build_nps_time_intelligence,
@@ -35,14 +36,21 @@ from nps_ops.insights import (
     build_store_action_sheet,
     build_store_daily_heatmap,
     build_store_non_sales_trend,
+    build_voc_benchmark_gap,
+    build_repeated_voc_themes,
     build_weekday_time_hotspots,
 )
 from nps_ops.metrics import build_store_priority, summarize_team_from_response
-from nps_ops.parser import extract_report_date, parse_workbook, profile_workbook
+from nps_ops.parser import extract_report_date, is_raw_ledger_workbook, parse_raw_response_fact, parse_workbook, profile_workbook
 
 
 def find_latest_file(raw_dir: Path = RAW_DIR) -> Path:
     files = [p for p in raw_dir.glob("**/*.xlsx") if not p.name.startswith("~$")]
+    # The 1~6월 raw VOC ledger is an enrichment/reference source, not the primary
+    # operating dashboard workbook. Do not let it become the default build source.
+    primary_files = [p for p in files if not is_raw_ledger_workbook(p)]
+    if primary_files:
+        files = primary_files
     if not files:
         raise FileNotFoundError(f"No .xlsx files found under {raw_dir}")
     return sorted(files, key=lambda p: (extract_report_date(p) or pd.Timestamp.min.date(), p.stat().st_mtime), reverse=True)[0]
@@ -182,7 +190,56 @@ def validate_response_contract(response_fact: pd.DataFrame) -> list[str]:
     return warnings
 
 
+def build_voc_enrichment(path: Path, team: str = DEFAULT_TEAM) -> dict[str, object]:
+    """Build only VOC drill-down enrichment artifacts from a raw ledger workbook.
+
+    Raw VOC ledgers such as `raw_260707_v1.xlsx` are reference data for the
+    non-sales VOC drill-down. They must not replace the primary operating
+    dashboard files that drive today NPS, trends, and the 기준일 picker.
+    """
+    PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+    EXPORT_DIR.mkdir(parents=True, exist_ok=True)
+
+    profile = profile_workbook(path)
+    response_fact = parse_raw_response_fact(path)
+    mapping = load_store_mapping()
+    if not mapping.empty:
+        response_fact = apply_store_mapping(response_fact, mapping, target_team=team, table_name="voc_enrichment_response_fact")
+
+    ymd = profile.report_date.strftime("%Y%m%d") if profile.report_date else "unknown"
+    voc_benchmark_gap = build_voc_benchmark_gap(response_fact, team=team, axis="비판매성")
+    repeated_voc_themes = build_repeated_voc_themes(response_fact, team=team, axis="비판매성")
+    positive_voc_library = build_positive_voc_library(response_fact, team=team, axis="비판매성")
+
+    outputs = {}
+    for name, df in [
+        ("voc_benchmark_gap", voc_benchmark_gap),
+        ("repeated_voc_themes", repeated_voc_themes),
+        ("positive_voc_library", positive_voc_library),
+    ]:
+        out = PROCESSED_DIR / f"{name}_{team}_{ymd}.parquet"
+        write_parquet(df, out)
+        outputs[name] = str(out)
+
+    excel_path = EXPORT_DIR / f"nps_voc_enrichment_{team}_{ymd}.xlsx"
+    with pd.ExcelWriter(excel_path, engine="openpyxl") as writer:
+        voc_benchmark_gap.to_excel(writer, sheet_name="voc_benchmark_gap", index=False)
+        repeated_voc_themes.to_excel(writer, sheet_name="repeated_voc_themes", index=False)
+        positive_voc_library.to_excel(writer, sheet_name="positive_voc_library", index=False)
+    outputs["excel_voc_enrichment"] = str(excel_path)
+
+    return {
+        "source": str(path),
+        "report_date": str(profile.report_date),
+        "mode": "voc_enrichment_only",
+        "outputs": outputs,
+    }
+
+
 def build(path: Path, team: str = DEFAULT_TEAM, target_score: float = DEFAULT_TARGET_SCORE) -> dict[str, object]:
+    if is_raw_ledger_workbook(path):
+        return build_voc_enrichment(path, team=team)
+
     PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
     EXPORT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -210,6 +267,9 @@ def build(path: Path, team: str = DEFAULT_TEAM, target_score: float = DEFAULT_TA
     sales_good_non_sales_weak = build_sales_good_non_sales_weak(store_priority, target_score=target_score)
     nps_source_recalc_diff = build_nps_source_recalc_diff(store_priority)
     sample_warning = build_sample_warning(store_priority, target_score=target_score)
+    voc_benchmark_gap = build_voc_benchmark_gap(parsed["response_fact"], team=team, axis="비판매성")
+    repeated_voc_themes = build_repeated_voc_themes(parsed["response_fact"], team=team, axis="비판매성")
+    positive_voc_library = build_positive_voc_library(parsed["response_fact"], team=team, axis="비판매성")
     action_sheet = build_store_action_sheet(
         store_priority,
         parsed["negative_feedback"][parsed["negative_feedback"].get("team_name", "").astype(str).str.strip().eq(team)],
@@ -292,6 +352,15 @@ def build(path: Path, team: str = DEFAULT_TEAM, target_score: float = DEFAULT_TA
     sample_warning_path = PROCESSED_DIR / f"sample_warning_{team}_{ymd}.parquet"
     write_parquet(sample_warning, sample_warning_path)
     outputs["sample_warning"] = str(sample_warning_path)
+    voc_benchmark_path = PROCESSED_DIR / f"voc_benchmark_gap_{team}_{ymd}.parquet"
+    write_parquet(voc_benchmark_gap, voc_benchmark_path)
+    outputs["voc_benchmark_gap"] = str(voc_benchmark_path)
+    repeated_voc_path = PROCESSED_DIR / f"repeated_voc_themes_{team}_{ymd}.parquet"
+    write_parquet(repeated_voc_themes, repeated_voc_path)
+    outputs["repeated_voc_themes"] = str(repeated_voc_path)
+    positive_voc_path = PROCESSED_DIR / f"positive_voc_library_{team}_{ymd}.parquet"
+    write_parquet(positive_voc_library, positive_voc_path)
+    outputs["positive_voc_library"] = str(positive_voc_path)
 
     # Human-readable export for quick review.
     excel_path = EXPORT_DIR / f"nps_ops_summary_{team}_{ymd}.xlsx"
@@ -310,6 +379,9 @@ def build(path: Path, team: str = DEFAULT_TEAM, target_score: float = DEFAULT_TA
         sales_good_non_sales_weak.head(EXPORT_TOP_N_STORES).to_excel(writer, sheet_name="sales_good_ns_weak", index=False)
         nps_source_recalc_diff.head(EXPORT_TOP_N_AUDIT).to_excel(writer, sheet_name="nps_recalc_audit", index=False)
         sample_warning.head(EXPORT_TOP_N_AUDIT).to_excel(writer, sheet_name="sample_warning", index=False)
+        voc_benchmark_gap.head(EXPORT_TOP_N_AUDIT).to_excel(writer, sheet_name="voc_benchmark_gap", index=False)
+        repeated_voc_themes.head(EXPORT_TOP_N_AUDIT).to_excel(writer, sheet_name="repeated_voc_themes", index=False)
+        positive_voc_library.head(EXPORT_TOP_N_AUDIT).to_excel(writer, sheet_name="positive_voc_library", index=False)
         action_sheet.head(EXPORT_TOP_N_STORES).to_excel(writer, sheet_name="store_action_sheet", index=False)
         parsed["negative_feedback"][parsed["negative_feedback"].get("team_name", "").astype(str).str.strip().eq(team)].to_excel(writer, sheet_name="negative_feedback", index=False)
     outputs["excel_summary"] = str(excel_path)
@@ -322,6 +394,8 @@ def build(path: Path, team: str = DEFAULT_TEAM, target_score: float = DEFAULT_TA
     nps_diff_top = nps_source_recalc_diff.head(15)[[c for c in ["agency_name", "store_name", "axis", "axis_total_responses", "source_nps", "recalc_nps", "nps_diff", "nps_diff_abs", "diagnosis_type"] if c in nps_source_recalc_diff.columns]]
     sample_warning_top = sample_warning.head(15)[[c for c in ["agency_name", "store_name", "axis", "axis_total_responses", "promoters", "passives", "detractors", "recalc_nps", "sample_grade", "risk_count", "sample_warning"] if c in sample_warning.columns]]
     action_top = action_sheet.head(10)[[c for c in ["agency_name", "store_name", "axis_nps", "axis_target_gap", "top_business_type", "top_voc_category", "representative_voc", "이번주_액션"] if c in action_sheet.columns]]
+    voc_benchmark_top = voc_benchmark_gap.head(10)[[c for c in ["agency_name", "store_name", "business_type", "total_responses", "nps", "hq_nps", "gap_vs_hq", "risk_count", "benchmark_priority"] if c in voc_benchmark_gap.columns]]
+    repeated_voc_top = repeated_voc_themes.head(10)[[c for c in ["agency_name", "store_name", "business_type", "voc_category", "risk_count", "detractors", "repeat_days", "representative_voc", "repeat_score"] if c in repeated_voc_themes.columns]]
     md = [
         f"# NPS 운영 Summary — {team} {ymd}",
         "",
@@ -365,7 +439,13 @@ def build(path: Path, team: str = DEFAULT_TEAM, target_score: float = DEFAULT_TA
         "## 10. 매장별 Action Sheet Top 10",
         action_top.to_markdown(index=False),
         "",
-        "## 11. 해석 메모",
+        "## 11. 본부 Benchmark Gap Top 10",
+        voc_benchmark_top.to_markdown(index=False),
+        "",
+        "## 12. 반복 VOC Theme Top 10",
+        repeated_voc_top.to_markdown(index=False),
+        "",
+        "## 13. 해석 메모",
         "- 우선순위는 NPS 점수만이 아니라 비추천/중립 절대량, 목표까지 필요 추천수, 응답자 수를 함께 반영합니다.",
         f"- Excel 요약 시트는 운영 검토용 Top N입니다: 매장/Action 계열 Top {EXPORT_TOP_N_STORES}, 업무유형 Top {EXPORT_TOP_N_TYPES}, 검산/경고 Top {EXPORT_TOP_N_AUDIT}.",
         "- 응답자 수가 작은 매장은 `샘플 착시형`으로 분리하여 과잉해석을 방지합니다.",
@@ -373,9 +453,9 @@ def build(path: Path, team: str = DEFAULT_TEAM, target_score: float = DEFAULT_TA
         "- 운영 판단 기준은 추천/중립/비추천 count 기반 재계산 NPS이며, 원천 Excel NPS 컬럼은 -100~100 점수로 표준화해 검산/참조용으로 유지합니다.",
     ]
     if scale_warnings:
-        md.extend(["", "## 12. NPS 스케일 경고", *[f"- {w}" for w in scale_warnings]])
+        md.extend(["", "## 14. NPS 스케일 경고", *[f"- {w}" for w in scale_warnings]])
     if response_contract_warnings:
-        md.extend(["", "## 13. Response Fact 계약 경고", *[f"- {w}" for w in response_contract_warnings]])
+        md.extend(["", "## 15. Response Fact 계약 경고", *[f"- {w}" for w in response_contract_warnings]])
     md_path.write_text("\n".join(md), encoding="utf-8")
     outputs["markdown_summary"] = str(md_path)
 
@@ -402,11 +482,18 @@ def main() -> None:
     print("BUILD_OK")
     print("source=", result["source"])
     print("report_date=", result["report_date"])
-    print("team_summary=", result["team_summary"])
-    print("store_totals=", result["store_totals"])
-    print("validation=", result["validation"])
-    print("scale_warnings=", result["scale_warnings"])
-    print("response_contract_warnings=", result["response_contract_warnings"])
+    if "mode" in result:
+        print("mode=", result["mode"])
+    if "team_summary" in result:
+        print("team_summary=", result["team_summary"])
+    if "store_totals" in result:
+        print("store_totals=", result["store_totals"])
+    if "validation" in result:
+        print("validation=", result["validation"])
+    if "scale_warnings" in result:
+        print("scale_warnings=", result["scale_warnings"])
+    if "response_contract_warnings" in result:
+        print("response_contract_warnings=", result["response_contract_warnings"])
     print("outputs=")
     for k, v in result["outputs"].items():
         print(f"  {k}: {v}")

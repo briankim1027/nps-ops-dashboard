@@ -98,7 +98,11 @@ def extract_report_date(path: Path) -> date | None:
         ts = pd.to_datetime(v, errors="coerce")
         if not pd.isna(ts):
             return ts.date()
-    m = re.search(r"_(\d{4})", path.stem)
+    m = re.search(r"(?:raw|only|v)_(\d{6})", path.stem, flags=re.IGNORECASE)
+    if m:
+        yymmdd = m.group(1)
+        return date(2000 + int(yymmdd[:2]), int(yymmdd[2:4]), int(yymmdd[4:]))
+    m = re.search(r"_(\d{4})(?!\d)", path.stem)
     if m:
         mmdd = m.group(1)
         # Operating file is 2026년06월 for this project scope.
@@ -316,8 +320,201 @@ def parse_crew_agg(path: str | Path, sheet_name: str = "T크루별") -> pd.DataF
     return df
 
 
+
+RAW_LEDGER_REQUIRED_COLUMNS = {"매장코드", "업무처리일자", "평가월", "판매성YN", "본부", "대리점", "대리점명", "매장명", "담당자", "담당자ID", "업무유형", "추천지수", "추천사유"}
+
+
+def is_raw_ledger_workbook(path: str | Path) -> bool:
+    """Return True for the 2026 1~6월 NPS raw ledger workbook shape.
+
+    The raw ledger has one flat sheet with row-level store/agency/staff/date/VOC
+    fields, unlike the operating workbook with separate 매장별/대리점별/T크루별 sheets.
+    """
+    path = Path(path)
+    try:
+        xls = pd.ExcelFile(path)
+        if not xls.sheet_names:
+            return False
+        cols = set(pd.read_excel(path, sheet_name=xls.sheet_names[0], nrows=0).columns.astype(str))
+        return RAW_LEDGER_REQUIRED_COLUMNS.issubset(cols)
+    except Exception:
+        return False
+
+
+def _read_raw_ledger(path: str | Path) -> pd.DataFrame:
+    path = Path(path)
+    xls = pd.ExcelFile(path)
+    df = pd.read_excel(
+        path,
+        sheet_name=xls.sheet_names[0],
+        dtype={"매장코드": str, "마케팅팀": str, "대리점": str, "매장": str, "담당자ID": str},
+    )
+    df = df.dropna(axis=0, how="all").copy()
+    df.columns = _dedupe_columns(list(df.columns))
+    return df
+
+
+def parse_raw_response_fact(path: str | Path) -> pd.DataFrame:
+    path = Path(path)
+    report_date = extract_report_date(path)
+    df = _read_raw_ledger(path)
+    rename = {
+        "매장코드": "store_code",
+        "구분": "response_type_raw",
+        "업무처리일자": "process_date",
+        "평가월": "evaluation_month",
+        "판매성YN": "NCSI",
+        "본부": "hq_name",
+        "마케팅팀": "marketing_team",
+        "미케팅팀명": "team_name",
+        "마케팅팀명": "team_name",
+        "대리점": "agency_code",
+        "대리점명": "agency_name",
+        "매장": "store_sub_code",
+        "매장명": "store_name",
+        "담당자": "marketer",
+        "담당자ID": "marketer_id",
+        "처리일": "process_date_text",
+        "업무유형": "business_type",
+        "추천지수": "recommend_score",
+        "추천지수확인": "recommend_score_confirmed",
+        "추천사유": "comment_text",
+    }
+    df = df.rename(columns={k: v for k, v in rename.items() if k in df.columns})
+    if "process_date" in df.columns:
+        df["process_date"] = _to_yyyymmdd(df["process_date"].astype(str).str.replace(r"\.0$", "", regex=True))
+    if "recommend_score" in df.columns:
+        df["recommend_score"] = pd.to_numeric(df["recommend_score"], errors="coerce")
+    score = pd.to_numeric(df.get("recommend_score", pd.Series(index=df.index, dtype="float64")), errors="coerce")
+    df["promoter_flag"] = score.ge(9).fillna(False).astype("int64")
+    df["passive_flag"] = score.between(7, 8, inclusive="both").fillna(False).astype("int64")
+    df["detractor_flag"] = score.le(6).fillna(False).astype("int64")
+    if "team_name" in df.columns:
+        df["team_name_full"] = df["team_name"].astype(str).str.strip()
+        df["team_name"] = df["team_name_full"].str.replace("마케팅팀", "", regex=False).str.strip()
+    df["response_type"] = pd.Series("", index=df.index, dtype="object")
+    df.loc[df["promoter_flag"].eq(1), "response_type"] = "추천"
+    df.loc[df["passive_flag"].eq(1), "response_type"] = "중립"
+    df.loc[df["detractor_flag"].eq(1), "response_type"] = "비추천"
+    df["evaluation_date"] = pd.NaT
+    df["report_date"] = pd.Timestamp(report_date) if report_date else pd.NaT
+    df["source_file"] = path.name
+    return df
+
+
+def _nps_from_group(g: pd.DataFrame) -> float | None:
+    total = len(g)
+    if total == 0:
+        return None
+    return (int(g["promoter_flag"].sum()) - int(g["detractor_flag"].sum())) / total * 100
+
+
+def parse_raw_store_agg(path: str | Path) -> pd.DataFrame:
+    rf = parse_raw_response_fact(path)
+    id_cols = ["team_name", "agency_code", "agency_name", "store_code", "store_name", "marketer"]
+    for c in id_cols:
+        if c not in rf.columns:
+            rf[c] = pd.NA
+    base = (
+        rf.groupby(id_cols, dropna=False)
+        .agg(promoters=("promoter_flag", "sum"), passives=("passive_flag", "sum"), detractors=("detractor_flag", "sum"), total_responses=("promoter_flag", "size"))
+        .reset_index()
+    )
+    axes = []
+    for axis_value, prefix in [("판매성", "sales_"), ("비판매성", "non_sales_")]:
+        part = rf[rf.get("NCSI", "").astype(str).str.strip().eq(axis_value)].copy()
+        agg = (
+            part.groupby(id_cols, dropna=False)
+            .agg(**{f"{prefix}promoters": ("promoter_flag", "sum"), f"{prefix}passives": ("passive_flag", "sum"), f"{prefix}detractors": ("detractor_flag", "sum"), f"{prefix}total_responses": ("promoter_flag", "size")})
+            .reset_index()
+        ) if not part.empty else pd.DataFrame(columns=id_cols + [f"{prefix}promoters", f"{prefix}passives", f"{prefix}detractors", f"{prefix}total_responses"])
+        axes.append(agg)
+    out = base.copy()
+    for agg in axes:
+        out = out.merge(agg, on=id_cols, how="left")
+    count_cols = [c for c in out.columns if c.endswith(("promoters", "passives", "detractors", "responses"))]
+    for c in count_cols:
+        out[c] = pd.to_numeric(out[c], errors="coerce").fillna(0).astype(int)
+    out["nps_score"] = out.apply(lambda r: (r.promoters - r.detractors) / r.total_responses * 100 if r.total_responses else None, axis=1)
+    out["sales_nps_score"] = out.apply(lambda r: (r.sales_promoters - r.sales_detractors) / r.sales_total_responses * 100 if r.sales_total_responses else None, axis=1)
+    out["non_sales_nps_score"] = out.apply(lambda r: (r.non_sales_promoters - r.non_sales_detractors) / r.non_sales_total_responses * 100 if r.non_sales_total_responses else None, axis=1)
+    out["prev_nps_score"] = pd.NA
+    out["hq_nps_score"] = pd.NA
+    out["report_date"] = rf["report_date"].iloc[0] if "report_date" in rf.columns and len(rf) else pd.NaT
+    out["source_file"] = Path(path).name
+    return out
+
+
+def parse_raw_agency_agg(path: str | Path) -> pd.DataFrame:
+    rf = parse_raw_response_fact(path)
+    id_cols = ["team_name", "agency_code", "agency_name", "marketer"]
+    for c in id_cols:
+        if c not in rf.columns:
+            rf[c] = pd.NA
+    out = (
+        rf.groupby(id_cols, dropna=False)
+        .agg(promoters=("promoter_flag", "sum"), passives=("passive_flag", "sum"), detractors=("detractor_flag", "sum"), total_responses=("promoter_flag", "size"))
+        .reset_index()
+    )
+    for axis_value, prefix in [("판매성", "sales_"), ("비판매성", "non_sales_")]:
+        part = rf[rf.get("NCSI", "").astype(str).str.strip().eq(axis_value)].copy()
+        agg = (
+            part.groupby(id_cols, dropna=False)
+            .agg(**{f"{prefix}promoters": ("promoter_flag", "sum"), f"{prefix}passives": ("passive_flag", "sum"), f"{prefix}detractors": ("detractor_flag", "sum"), f"{prefix}total_responses": ("promoter_flag", "size")})
+            .reset_index()
+        ) if not part.empty else pd.DataFrame(columns=id_cols + [f"{prefix}promoters", f"{prefix}passives", f"{prefix}detractors", f"{prefix}total_responses"])
+        out = out.merge(agg, on=id_cols, how="left")
+    for c in [c for c in out.columns if c.endswith(("promoters", "passives", "detractors", "responses"))]:
+        out[c] = pd.to_numeric(out[c], errors="coerce").fillna(0).astype(int)
+    out["nps_score"] = out.apply(lambda r: (r.promoters - r.detractors) / r.total_responses * 100 if r.total_responses else None, axis=1)
+    out["sales_nps_score"] = out.apply(lambda r: (r.sales_promoters - r.sales_detractors) / r.sales_total_responses * 100 if r.sales_total_responses else None, axis=1)
+    out["non_sales_nps_score"] = out.apply(lambda r: (r.non_sales_promoters - r.non_sales_detractors) / r.non_sales_total_responses * 100 if r.non_sales_total_responses else None, axis=1)
+    out["report_date"] = rf["report_date"].iloc[0] if "report_date" in rf.columns and len(rf) else pd.NaT
+    out["source_file"] = Path(path).name
+    return out
+
+
+def parse_raw_negative_feedback(path: str | Path) -> pd.DataFrame:
+    rf = parse_raw_response_fact(path)
+    neg = rf[pd.to_numeric(rf.get("recommend_score"), errors="coerce").le(8)].copy()
+    rename = {"comment_text": "reason_text", "process_date": "response_date"}
+    neg = neg.rename(columns={k: v for k, v in rename.items() if k in neg.columns})
+    if "response_date" in neg.columns:
+        neg["process_date"] = neg["response_date"]
+    return neg
+
+
+def parse_raw_crew_agg(path: str | Path, by_store: bool = False) -> pd.DataFrame:
+    rf = parse_raw_response_fact(path)
+    id_cols = ["team_name", "agency_code", "agency_name", "marketer_id", "marketer"]
+    if by_store:
+        id_cols = ["team_name", "agency_code", "agency_name", "store_code", "store_name", "marketer_id", "marketer"]
+    for c in id_cols:
+        if c not in rf.columns:
+            rf[c] = pd.NA
+    out = (
+        rf.groupby(id_cols, dropna=False)
+        .agg(promoters=("promoter_flag", "sum"), passives=("passive_flag", "sum"), detractors=("detractor_flag", "sum"), total_responses=("promoter_flag", "size"), avg_recommend_score=("recommend_score", "mean"))
+        .reset_index()
+    )
+    out = out.rename(columns={"marketer_id": "crew_id", "marketer": "crew_name"})
+    out["nps_score"] = out.apply(lambda r: (r.promoters - r.detractors) / r.total_responses * 100 if r.total_responses else None, axis=1)
+    out["report_date"] = rf["report_date"].iloc[0] if "report_date" in rf.columns and len(rf) else pd.NaT
+    out["source_file"] = Path(path).name
+    out["source_sheet"] = "raw_ledger_store_crew" if by_store else "raw_ledger_crew"
+    return out
+
 def parse_workbook(path: str | Path) -> dict[str, pd.DataFrame]:
     path = Path(path)
+    if is_raw_ledger_workbook(path):
+        return {
+            "response_fact": parse_raw_response_fact(path),
+            "store_agg": parse_raw_store_agg(path),
+            "agency_agg": parse_raw_agency_agg(path),
+            "negative_feedback": parse_raw_negative_feedback(path),
+            "crew_agg": parse_raw_crew_agg(path, by_store=False),
+            "store_crew_agg": parse_raw_crew_agg(path, by_store=True),
+        }
     return {
         "response_fact": parse_response_fact(path),
         "store_agg": parse_store_agg(path),
