@@ -1181,7 +1181,7 @@ with ns_tab4:
         })
 
 with ns_tab5:
-    st.markdown("**본부 평균 대비 매장×업무유형 NPS 차이** — 전북 매장이 같은 업무유형의 본부 평균보다 어디서 낮고, 어디서 우수한지 분리해서 봅니다.")
+    st.markdown("**본부 평균 대비 Gap 코칭 후보 Top 20 — 매장×업무유형 기준** — 전북 매장이 같은 업무유형의 본부 평균보다 어디서 낮고, 어디서 우수한지 분리해서 봅니다.")
     st.markdown(
         f"""
         <div class="skt-help-box">
@@ -1209,7 +1209,24 @@ with ns_tab5:
         for c in numeric_cols:
             if c in bm.columns:
                 bm[c] = pd.to_numeric(bm.get(c), errors="coerce")
+        bm["business_type"] = bm.get("business_type", "미분류").fillna("미분류").astype(str)
+        bm["risk_count"] = pd.to_numeric(bm.get("risk_count", 0), errors="coerce").fillna(0)
         bm["gap_signal"] = bm["gap_vs_hq"].apply(lambda v: "본부 평균 상회 · 우수/확산 후보" if pd.notna(v) and v >= 0 else "본부 평균 하회 · 코칭 우선 후보")
+
+        business_type_order = (
+            bm[bm["risk_count"] > 0]
+            .groupby("business_type", as_index=False)["risk_count"].sum()
+            .sort_values("risk_count", ascending=False)["business_type"]
+            .tolist()
+        )
+        if not business_type_order:
+            business_type_order = sorted(bm["business_type"].dropna().unique().tolist())
+        benchmark_type_palette = px.colors.qualitative.Set2 + px.colors.qualitative.Bold + px.colors.qualitative.Pastel
+        benchmark_type_color_map = {
+            business_type: benchmark_type_palette[i % len(benchmark_type_palette)]
+            for i, business_type in enumerate(business_type_order)
+        }
+
         bm_show = bm.sort_values(["benchmark_priority", "gap_vs_hq"], ascending=[False, True]).head(60).rename(columns={
             "agency_name": "대리점", "store_name": "매장", "business_type": "업무유형",
             "promoters": "추천", "passives": "중립", "detractors": "비추천", "total_responses": "비판매성 응답",
@@ -1223,10 +1240,11 @@ with ns_tab5:
             bm_show.head(20),
             x="본부 평균 대비 차이",
             y="매장",
-            color="Gap 해석",
+            color="업무유형",
             orientation="h",
-            hover_data=["대리점", "업무유형", "비판매성 응답", "추천", "중립", "비추천", "Risk건수"],
-            color_discrete_map={"본부 평균 하회 · 코칭 우선 후보": "#DC6339", "본부 평균 상회 · 우수/확산 후보": "#249A45"},
+            hover_data=["Gap 해석", "대리점", "업무유형", "비판매성 응답", "추천", "중립", "비추천", "Risk건수"],
+            color_discrete_map=benchmark_type_color_map,
+            category_orders={"업무유형": business_type_order},
         )
         fig.add_vline(x=0, line_width=2, line_dash="solid", line_color="#1A1A1A", annotation_text="본부 평균", annotation_position="top")
         fig.update_layout(height=560, plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", yaxis=dict(categoryorder="total ascending"), xaxis_title="본부 평균 대비 NPS 차이(+ 상회 / - 하회)")
@@ -1255,12 +1273,6 @@ with ns_tab5:
                 lambda r: f"{r['business_type']} · {int(r['risk_count']):,}건 · {r['risk_share'] * 100:.1f}%",
                 axis=1,
             )
-            business_type_order = team_type_risk["business_type"].tolist()
-            benchmark_type_palette = px.colors.qualitative.Set2 + px.colors.qualitative.Bold + px.colors.qualitative.Pastel
-            benchmark_type_color_map = {
-                business_type: benchmark_type_palette[i % len(benchmark_type_palette)]
-                for i, business_type in enumerate(business_type_order)
-            }
             top_type = team_type_risk.iloc[0]
             st.info(
                 f"전북팀 상반기 누적 비판매성 Risk 중 `{top_type['business_type']}`이 "

@@ -146,6 +146,13 @@ category_orders={"store_name": top_store_order, "business_type": business_type_o
 
 사용자 확인 중, 상단 `상반기 누적 업무유형 Risk 분포`와 하단 `상반기 누적 Risk 상위 20개 매장` stacked bar에서 같은 업무유형인데 색상이 다르게 보이는 문제가 있었습니다.
 
+추가 확인 결과, 첫 번째 `본부 평균 대비 Gap` 그래프도 hover에는 `업무유형`이 나오지만 색상은 `Gap 해석` 기준으로 표시되어 있어, 아래 업무유형 그래프들과 색상 언어가 달라질 수 있었습니다. 따라서 첫 번째 그래프도 제목과 색상 기준을 함께 정리했습니다.
+
+- 제목: `본부 평균 대비 Gap 코칭 후보 Top 20 — 매장×업무유형 기준`
+- 색상: `Gap 해석` 기준이 아니라 `업무유형` 기준
+- `Gap 해석`은 hover 정보와 0 기준선 좌우 방향으로 유지
+- 세 그래프 모두 동일 `business_type_order`와 `benchmark_type_color_map` 공유
+
 원인은 Plotly Express가 각 chart에서 `color_discrete_sequence`를 별도로 적용하면서, 차트별 등장 순서에 따라 색상을 다시 할당했기 때문입니다.
 
 해결 방식은 공통 color map을 생성하고 두 그래프에 동일하게 주입하는 방식으로 정리했습니다.
