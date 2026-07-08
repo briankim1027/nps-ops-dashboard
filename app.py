@@ -388,10 +388,32 @@ def get_file_for_date(files_list, date_str):
     return files_list[0] if files_list else None
 
 
+def is_voc_reference_file(path: Path) -> bool:
+    """Return True only for cumulative/raw-ledger VOC enrichment artifacts."""
+    try:
+        df = pd.read_parquet(path)
+    except Exception:
+        return False
+    source_scope = str(df.get("source_scope", pd.Series(dtype=object)).dropna().astype(str).iloc[0]).lower() if "source_scope" in df.columns and df["source_scope"].notna().any() else ""
+    source_name = str(df.get("source_file", pd.Series(dtype=object)).dropna().astype(str).iloc[0]).lower() if "source_file" in df.columns and df["source_file"].notna().any() else ""
+    if source_scope == "raw_voc_ledger" or "raw_" in source_name or "추천사유only" in source_name:
+        return True
+    # Backward compatibility for older cumulative reference artifacts that did
+    # not yet carry source metadata. Daily operating-workbook artifacts are tiny
+    # after date updates, while the 1~6월 reference has broad store coverage.
+    store_count = int(df["store_name"].nunique()) if "store_name" in df.columns else 0
+    response_sum = float(pd.to_numeric(df.get("total_responses", 0), errors="coerce").fillna(0).sum()) if "total_responses" in df.columns else 0.0
+    return store_count >= 10 or response_sum >= 100
+
+
 def get_latest_reference_file(files_list):
-    # VOC enrichment is a reference layer. Use the latest available reference,
-    # independent from the operating 기준일/date picker.
-    return files_list[0] if files_list else None
+    # VOC enrichment is a cumulative/raw-ledger reference layer. Use the latest
+    # valid reference independent from the operating 기준일/date picker, and do
+    # not fall back to sparse daily operating artifacts.
+    for f in files_list:
+        if is_voc_reference_file(f):
+            return f
+    return None
 
 
 def file_date_label(path: Path | None) -> str:
@@ -1356,7 +1378,7 @@ with ns_tab5:
             "Benchmark Priority": st.column_config.NumberColumn("Benchmark Priority", format="%.1f"),
         })
 with ns_tab6:
-    st.markdown("**매장별 VOC Theme** <span style='background:#e8f0fe;color:#1a73e8;font-size:0.75rem;padding:2px 8px;border-radius:10px;margin-left:8px;'>운영데이터 기준</span> — 각 매장별로 어떤 비판매성 VOC Theme가 가장 자주 발생하는지 확인합니다.", unsafe_allow_html=True)
+    st.markdown("**매장별 VOC Theme** <span style='background:#e8f0fe;color:#1a73e8;font-size:0.75rem;padding:2px 8px;border-radius:10px;margin-left:8px;'>'26년 상반기 누적 VOC 보강 기준</span> — 각 매장별로 어떤 비판매성 VOC Theme가 가장 자주 발생하는지 확인합니다.", unsafe_allow_html=True)
     if repeated_voc_view_base.empty:
         st.info("매장별 VOC Theme 데이터가 없습니다.")
     else:
@@ -1426,7 +1448,7 @@ with ns_tab6:
             },
         )
 with ns_tab7:
-    st.markdown("**우수 VOC Library** — 추천 고객의 표현을 좋은 응대 cue로 모아 현장 공유 문구로 활용합니다.")
+    st.markdown("**우수 VOC Library** <span style='background:#e8f0fe;color:#1a73e8;font-size:0.75rem;padding:2px 8px;border-radius:10px;margin-left:8px;'>'26년 상반기 누적 VOC 보강 기준</span> — 추천 고객의 표현을 좋은 응대 cue로 모아 현장 공유 문구로 활용합니다.", unsafe_allow_html=True)
     if positive_voc_view_base.empty:
         st.info("우수 VOC Library 데이터가 없습니다.")
     else:

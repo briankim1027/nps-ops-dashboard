@@ -210,6 +210,9 @@ def build_voc_enrichment(path: Path, team: str = DEFAULT_TEAM) -> dict[str, obje
     voc_benchmark_gap = build_voc_benchmark_gap(response_fact, team=team, axis="비판매성")
     repeated_voc_themes = build_repeated_voc_themes(response_fact, team=team, axis="비판매성")
     positive_voc_library = build_positive_voc_library(response_fact, team=team, axis="비판매성")
+    for df in [voc_benchmark_gap, repeated_voc_themes, positive_voc_library]:
+        df["source_file"] = path.name
+        df["source_scope"] = "raw_voc_ledger"
 
     outputs = {}
     for name, df in [
@@ -352,15 +355,11 @@ def build(path: Path, team: str = DEFAULT_TEAM, target_score: float = DEFAULT_TA
     sample_warning_path = PROCESSED_DIR / f"sample_warning_{team}_{ymd}.parquet"
     write_parquet(sample_warning, sample_warning_path)
     outputs["sample_warning"] = str(sample_warning_path)
-    voc_benchmark_path = PROCESSED_DIR / f"voc_benchmark_gap_{team}_{ymd}.parquet"
-    write_parquet(voc_benchmark_gap, voc_benchmark_path)
-    outputs["voc_benchmark_gap"] = str(voc_benchmark_path)
-    repeated_voc_path = PROCESSED_DIR / f"repeated_voc_themes_{team}_{ymd}.parquet"
-    write_parquet(repeated_voc_themes, repeated_voc_path)
-    outputs["repeated_voc_themes"] = str(repeated_voc_path)
-    positive_voc_path = PROCESSED_DIR / f"positive_voc_library_{team}_{ymd}.parquet"
-    write_parquet(positive_voc_library, positive_voc_path)
-    outputs["positive_voc_library"] = str(positive_voc_path)
+    # Do not persist VOC enrichment artifacts from the primary operating workbook.
+    # Those tabs are a reference layer built from the 1~6월 raw VOC ledger via
+    # build_voc_enrichment(). Writing them here would overwrite the cumulative
+    # reference with the current operating day and make Benchmark Gap/VOC Theme/
+    # Library look artificially sparse after a daily workbook update.
 
     # Human-readable export for quick review.
     excel_path = EXPORT_DIR / f"nps_ops_summary_{team}_{ymd}.xlsx"
